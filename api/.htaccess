@@ -1,0 +1,30 @@
+# Все адреса API ведут в index.php, который сам разбирает путь.
+#
+# Без mod_rewrite обращение к /api/v1/athletes вернёт 404 — тогда
+# кабинет может обращаться к /api/index.php?route=athletes,
+# это поддерживается тем же кодом.
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /api/
+
+  # Существующие файлы отдаются как есть
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Остальное — в index.php, путь уходит в ?route=
+  RewriteRule ^(?:v\d+/)?(.*)$ index.php?route=$1 [QSA,L]
+</IfModule>
+
+# Заголовок Authorization: часть хостингов не передаёт его в PHP
+<IfModule mod_rewrite.c>
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
+
+# Папки core/ и modules/ закрыты своими .htaccess: правило выше
+# отдаёт существующие файлы как есть, и без запрета ядро можно
+# было бы прочитать прямо из браузера.
+
+AddDefaultCharset UTF-8
