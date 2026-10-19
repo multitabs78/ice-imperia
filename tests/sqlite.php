@@ -67,6 +67,23 @@ class SqliteTestDb
             return self::createTable($sql);
         }
 
+        if (preg_match('/^ALTER\s+TABLE/i', $sql)) {
+            // Внешний ключ после создания таблицы SQLite добавить
+            // не умеет. В тестах это не мешает: целостность проверяет
+            // настоящая база, а здесь важно, чтобы столбец появился.
+            if (preg_match('/ADD\s+CONSTRAINT/i', $sql)) {
+                return 'SELECT 1';
+            }
+
+            if (preg_match('/^(ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN\s+`?\w+`?)\s+(.*)$/is', $sql, $m)) {
+                // AFTER <столбец> SQLite не понимает, а тип нужно перевести
+                $rest = preg_replace('/\s+AFTER\s+`?\w+`?\s*$/i', '', $m[2]);
+                return $m[1] . ' ' . self::columnType($rest);
+            }
+
+            return $sql;
+        }
+
         // Вставки начальных значений
         $sql = preg_replace('/\s*ON DUPLICATE KEY UPDATE .*$/is', '', $sql);
         $sql = preg_replace('/^INSERT\s+INTO\b/i', 'INSERT OR IGNORE INTO', $sql);

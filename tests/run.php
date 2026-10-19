@@ -509,21 +509,101 @@ check('прежняя версия ушла в архив', $old === 'archived',
 $sub = $pdo->query('SELECT price FROM subscriptions WHERE tariff_id = ' . (int) $tariff)->fetchColumn();
 check('выданный абонемент не пересчитался', (float) $sub === 14400.0, 'в абонементе ' . $sub);
 
+echo "\nОдин человек в двух ролях\n";
+
+$r = call('POST', '/coaches', array(
+    'last_name' => 'Стефанова', 'first_name' => 'Анастасия',
+    'email' => 'admin@example.test', 'password' => 'coachpass123'), $admin);
+check('занятая почта — понятный отказ', $r['status'] === 409
+      && $r['body']['error'] === 'contact_taken', 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('GET', '/users?free_coach=1', null, $admin);
+$free = array();
+foreach ($r['body']['items'] as $u) { $free[$u['id']] = $u['name']; }
+check('список свободных учётных записей отдаётся',
+      $r['status'] === 200 && isset($free[$adminId]), implode(', ', $free));
+$coachUser = (int) $pdo->query('SELECT user_id FROM coaches WHERE id = ' . (int) $coach)
+                       ->fetchColumn();
+check('тренер с учётной записью в список не попал', !isset($free[$coachUser]),
+      'учётная запись ' . $coachUser . ' в списке');
+
+$r = call('POST', '/coaches', array(
+    'last_name' => 'Стефанова', 'first_name' => 'Анастасия',
+    'user_id' => $adminId), $admin);
+$adminCoach = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('карточка тренера привязана к учётной записи администратора',
+      $r['status'] === 201 && $adminCoach, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$roles = $pdo->query('SELECT role FROM user_roles WHERE user_id = ' . (int) $adminId)
+             ->fetchAll(PDO::FETCH_COLUMN);
+sort($roles);
+check('у человека стало две роли', $roles === array('admin', 'coach'), implode(', ', $roles));
+
+$r = call('POST', '/coaches', array(
+    'last_name' => 'Ещё', 'first_name' => 'Раз', 'user_id' => $adminId), $admin);
+check('вторую карточку на ту же запись не завести', $r['status'] === 409
+      && $r['body']['error'] === 'user_is_coach', 'код ' . $r['status']);
+
+$r = call('GET', '/me', null, $admin);
+check('в ответе о себе видны обе роли',
+      in_array('admin', $r['body']['roles']) && in_array('coach', $r['body']['roles']),
+      implode(', ', $r['body']['roles']));
+
+echo "\nУслуги и цены\n";
+
+$r = call('GET', '/services', null, $admin);
+$byCode = array();
+foreach ($r['body']['items'] as $one) { if ($one['code']) { $byCode[$one['code']] = $one; } }
+check('системные услуги заведены миграцией',
+      isset($byCode['single_lesson']) && isset($byCode['extra_lesson']),
+      implode(', ', array_keys($byCode)));
+check('цена разового без абонемента задана',
+      $byCode['single_lesson']['price_set'] === true);
+check('цена разового при абонементе пока не задана',
+      $byCode['extra_lesson']['price_set'] === false);
+
+$r = call('PATCH', '/services/' . $byCode['extra_lesson']['id'],
+          array('price' => 1200, 'reason' => 'Решение от 20.10'), $admin);
+check('цену услуги можно задать', $r['status'] === 200, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('PATCH', '/services/' . $byCode['single_lesson']['id'],
+          array('status' => 'archived'), $admin);
+check('системную услугу в архив не убрать', $r['status'] === 409
+      && $r['body']['error'] === 'service_is_system', 'код ' . $r['status']);
+
+$r = call('PATCH', '/services/' . $byCode['single_lesson']['id'],
+          array('name' => 'Разовое занятие', 'price' => 2700), $admin);
+check('название и цену системной услуги менять можно', $r['status'] === 200, 'код ' . $r['status']);
+
+$r = call('POST', '/services', array('name' => 'Прокат коньков', 'price' => 300), $admin);
+$rental = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('своя услуга добавляется', $r['status'] === 201 && $rental, 'код ' . $r['status']);
+
+$r = call('PATCH', '/services/' . $rental, array('status' => 'archived'), $admin);
+check('свою услугу в архив убрать можно', $r['status'] === 200, 'код ' . $r['status']);
+
+$r = call('GET', '/services', null, $coachToken);
+check('тренеру справочник услуг не отдаётся', $r['status'] === 403, 'код ' . $r['status']);
+
 echo "\nНастройки\n";
 
 $r = call('GET', '/settings', null, $admin);
-check('настройки читаются', $r['status'] === 200 && count($r['body']['items']) >= 5,
+check('настройки читаются', $r['status'] === 200 && count($r['body']['items']) >= 4,
       'записей: ' . (isset($r['body']['items']) ? count($r['body']['items']) : '—'));
 
-$r = call('PATCH', '/settings', array('single_lesson_price' => '2600', 'reason' => 'Цены с января'), $admin);
-check('настройка сохранена', $r['status'] === 200 && in_array('single_lesson_price', $r['body']['saved']),
-      $r['raw']);
+$r = call('PATCH', '/settings', array('illness_days_threshold' => '15', 'reason' => 'Решение школы'), $admin);
+check('настройка сохранена', $r['status'] === 200
+      && in_array('illness_days_threshold', $r['body']['saved']), $r['raw']);
 
-$value = $pdo->query("SELECT value FROM settings WHERE name = 'single_lesson_price'")->fetchColumn();
-check('значение действительно изменилось', $value === '2600', 'в базе ' . $value);
+$value = $pdo->query("SELECT value FROM settings WHERE name = 'illness_days_threshold'")->fetchColumn();
+check('значение действительно изменилось', $value === '15', 'в базе ' . $value);
 
-$r = call('PATCH', '/settings', array('single_lesson_price' => ''), $admin);
+$r = call('PATCH', '/settings', array('illness_days_threshold' => ''), $admin);
 check('пустое значение не сохраняется', $r['status'] === 422, 'код ' . $r['status']);
+
+$gone = (int) $pdo->query("SELECT COUNT(*) FROM settings WHERE name = 'single_lesson_price'")
+                  ->fetchColumn();
+check('цена уехала из настроек в услуги', $gone === 0, 'записей: ' . $gone);
 
 echo "\nУдаление персональных данных\n";
 

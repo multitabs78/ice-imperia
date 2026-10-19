@@ -138,11 +138,33 @@ try {
         $statements = split_sql(preg_replace('/^\xEF\xBB\xBF/', '', $sql));
         $n = 0;
 
+        $skipped = 0;
+
         foreach ($statements as $i => $statement) {
             try {
                 $pdo->exec($statement);
                 $n++;
             } catch (PDOException $error) {
+                // DDL в MySQL не откатывается: если файл упал
+                // на середине, часть изменений уже внесена.
+                // CREATE TABLE пишется с IF NOT EXISTS, а ALTER
+                // так не умеет — поэтому «уже есть» считаем
+                // выполненным, а не ошибкой. Иначе повторный
+                // запуск после сбоя невозможен.
+                $code = isset($error->errorInfo[1]) ? (int) $error->errorInfo[1] : 0;
+                $done = array(
+                    1050,  // таблица уже есть
+                    1060,  // столбец уже есть
+                    1061,  // такой индекс уже есть
+                    1091,  // нечего удалять: столбца или ключа нет
+                    1826,  // внешний ключ с таким именем уже есть
+                );
+
+                if (in_array($code, $done, true)) {
+                    $skipped++;
+                    continue;
+                }
+
                 throw new RuntimeException(
                     'Файл ' . $name . ', команда ' . ($i + 1) . ' из ' . count($statements)
                     . ': ' . $error->getMessage()
@@ -152,7 +174,8 @@ try {
         }
 
         $insert->execute(array($name, $n));
-        $steps[] = array('ok', $name, 'применена, команд: ' . $n);
+        $steps[] = array('ok', $name, 'применена, команд: ' . $n
+                       . ($skipped ? ', уже было: ' . $skipped : ''));
     }
 
     // Что получилось в базе

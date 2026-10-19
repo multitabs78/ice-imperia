@@ -241,6 +241,7 @@
     { id: 'coaches',  title: 'Тренеры',    roles: ['admin'] },
     { id: 'parents',  title: 'Родители',   roles: ['admin'] },
     { id: 'tariffs',  title: 'Тарифы',     roles: ['admin'] },
+    { id: 'services', title: 'Услуги',     roles: ['admin'] },
     { id: 'settings', title: 'Настройки',  roles: ['admin'] }
   ];
 
@@ -880,28 +881,47 @@
   }
 
   function newCoach() {
-    openSheet({
-      title: 'Новый тренер',
-      note: 'Если задать временный пароль, тренер сможет войти в кабинет. '
-          + 'При первом входе система попросит заменить его на свой.',
-      submit: 'Добавить',
-      fields: [
-        { name: 'last_name', label: 'Фамилия' },
-        { name: 'first_name', label: 'Имя' },
-        { name: 'middle_name', label: 'Отчество, если есть' },
-        { name: 'phone', label: 'Телефон', placeholder: '+7 999 000 00 00' },
-        { name: 'email', label: 'Почта' },
-        { name: 'password', label: 'Временный пароль', type: 'text',
-          hint: 'Не короче восьми символов. Оставьте пустым, если вход пока не нужен' }
-      ],
-      onSubmit: function (values) {
-        Object.keys(values).forEach(function (k) { if (!values[k]) { delete values[k]; } });
-        return api('POST', '/coaches', values).then(function (answer) {
-          if (!answer.ok) { return answer; }
-          toast('Тренер добавлен');
-          screenCoaches();
-        });
-      }
+    // Список тех, у кого ещё нет карточки тренера: один человек
+    // бывает и администратором, и тренером, и второй вход ему
+    // заводить незачем
+    api('GET', '/users?free_coach=1').then(function (answer) {
+      var accounts = [{ value: '', label: 'создать новую учётную запись' }].concat(
+        (answer.data.items || []).map(function (u) {
+          return { value: u.id, label: u.name + (u.email ? ' · ' + u.email : '') };
+        })
+      );
+
+      openSheet({
+        title: 'Новый тренер',
+        note: 'Если этот человек уже есть в кабинете — например, вы сами как администратор, — '
+            + 'выберите его учётную запись. Тогда вход останется один, а ролей станет две.',
+        submit: 'Добавить',
+        fields: [
+          { name: 'last_name', label: 'Фамилия' },
+          { name: 'first_name', label: 'Имя' },
+          { name: 'middle_name', label: 'Отчество, если есть' },
+          { name: 'user_id', label: 'Учётная запись', type: 'select', options: accounts },
+          { name: 'phone', label: 'Телефон', placeholder: '+7 999 000 00 00',
+            hint: 'Телефон, почта и пароль нужны только для новой учётной записи' },
+          { name: 'email', label: 'Почта' },
+          { name: 'password', label: 'Временный пароль', type: 'text',
+            hint: 'Не короче восьми символов. Пусто — тренер пока без входа в кабинет' }
+        ],
+        onSubmit: function (values) {
+          if (values.user_id) {
+            // Контакты существующей записи здесь не трогаем
+            delete values.phone;
+            delete values.email;
+            delete values.password;
+          }
+          Object.keys(values).forEach(function (k) { if (!values[k]) { delete values[k]; } });
+          return api('POST', '/coaches', values).then(function (result) {
+            if (!result.ok) { return result; }
+            toast('Тренер добавлен');
+            screenCoaches();
+          });
+        }
+      });
     });
   }
 
@@ -1150,6 +1170,113 @@
   }
 
   /* =====================================================
+     Услуги и цены
+     ===================================================== */
+
+  function screenServices() {
+    drawTabs('services');
+    loading();
+
+    api('GET', '/services?status=all').then(function (answer) {
+      if (!answer.ok) { return fail(answer); }
+
+      var items = answer.data.items || [];
+      var box = clear(page);
+
+      box.appendChild(heading('Услуги и цены', null,
+        [el('button', { class: 'btn btn--primary btn--small', onclick: newService }, 'Добавить услугу')]));
+
+      box.appendChild(el('p', { class: 'field__note', text:
+        'Все цены школы в одном месте. Услуги с пометкой «для расчётов» использует система — '
+        + 'их можно переименовать и переоценить, но не убрать.' }));
+
+      var missing = items.filter(function (s) { return s.system && !s.price_set; });
+      if (missing.length) {
+        box.appendChild(el('p', { class: 'alert' }, 'Не задана цена: '
+          + missing.map(function (s) { return s.name; }).join(', ')
+          + '. Пока цены нет, начисление по этой услуге не пройдёт.'));
+      }
+
+      if (!items.length) {
+        box.appendChild(board([el('p', { class: 'empty', text: 'Услуг пока нет' })]));
+        return;
+      }
+
+      var rows = items.map(function (s) {
+        return el('tr', { class: 'is-flat' }, [
+          el('td', { class: 'title' }, s.name),
+          el('td', { class: 'num', 'data-label': 'Цена' },
+             s.price_set ? money(s.price) : el('span', { class: 'pill pill--warn' }, 'не задана')),
+          el('td', { class: 'dim', 'data-label': 'Пояснение' }, s.note || ''),
+          el('td', null, [
+            s.system ? el('span', { class: 'pill' }, 'для расчётов') : null,
+            s.status === 'archived' ? el('span', { class: 'pill pill--off' }, 'в архиве') : null
+          ]),
+          el('td', { class: 'act' },
+             el('button', { class: 'linkish',
+               onclick: function () { editService(s); } }, 'Изменить'))
+        ]);
+      });
+
+      box.appendChild(board([table([
+        { title: 'Услуга' }, { title: 'Цена', class: 'num' },
+        { title: 'Пояснение' }, { title: '' }, { title: '', class: 'act' }
+      ], rows)]));
+    });
+  }
+
+  function newService() {
+    openSheet({
+      title: 'Новая услуга',
+      note: 'Например, прокат коньков, заточка, индивидуальное занятие.',
+      submit: 'Добавить',
+      fields: [
+        { name: 'name', label: 'Название' },
+        { name: 'price', label: 'Цена, ₽', type: 'number' },
+        { name: 'note', label: 'Пояснение, если нужно' }
+      ],
+      onSubmit: function (values) {
+        if (values.price === '') { delete values.price; }
+        return api('POST', '/services', values).then(function (answer) {
+          if (!answer.ok) { return answer; }
+          toast('Услуга добавлена');
+          screenServices();
+        });
+      }
+    });
+  }
+
+  function editService(s) {
+    openSheet({
+      title: 'Изменить услугу',
+      note: s.system
+        ? 'Эта услуга участвует в расчётах, поэтому убрать её нельзя — только переименовать '
+          + 'или поменять цену.'
+        : null,
+      fields: [
+        { name: 'name', label: 'Название', value: s.name },
+        { name: 'price', label: 'Цена, ₽', type: 'number',
+          value: s.price_set ? Math.round(s.price) : '' },
+        { name: 'note', label: 'Пояснение', value: s.note },
+        { name: 'reason', label: 'Основание', placeholder: 'Для журнала' }
+      ].concat(s.system ? [] : [
+        { name: 'status', label: 'Состояние', type: 'select', value: s.status, options: [
+          { value: 'active', label: 'действует' },
+          { value: 'archived', label: 'в архиве' }
+        ] }
+      ]),
+      onSubmit: function (values) {
+        if (values.price === '') { delete values.price; }
+        return api('PATCH', '/services/' + s.id, values).then(function (answer) {
+          if (!answer.ok) { return answer; }
+          toast('Сохранено');
+          screenServices();
+        });
+      }
+    });
+  }
+
+  /* =====================================================
      Настройки
      ===================================================== */
 
@@ -1224,6 +1351,7 @@
     if (where === 'coaches'  && can(['admin'])) { return screenCoaches(); }
     if (where === 'parents'  && can(['admin'])) { return screenParents(); }
     if (where === 'tariffs'  && can(['admin'])) { return screenTariffs(); }
+    if (where === 'services' && can(['admin'])) { return screenServices(); }
     if (where === 'settings' && can(['admin'])) { return screenSettings(); }
 
     window.location.hash = '#/' + firstTab();

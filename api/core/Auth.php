@@ -213,6 +213,43 @@ class Auth
         );
     }
 
+    /**
+     * Видит ли текущий пользователь эту тренировку.
+     *
+     * Кроме закреплённых за группой тренеров её видит тот, кого
+     * на неё назначили: когда тренер заболел, группу отмечает
+     * заменяющий. Он же и получает эту тренировку в расчёт
+     * выплат — считается по полю тренировки, а не по группе.
+     */
+    public static function sees_training($trainingId)
+    {
+        if (self::has('admin')) {
+            return true;
+        }
+
+        $coachId = self::coach_id();
+        if (!$coachId) {
+            return false;
+        }
+
+        return (bool) Db::value(
+            'SELECT 1
+               FROM trainings t
+          LEFT JOIN group_coaches gc ON gc.group_id = t.group_id AND gc.coach_id = ?
+              WHERE t.id = ? AND (t.coach_id = ? OR gc.coach_id IS NOT NULL)
+              LIMIT 1',
+            array($coachId, (int) $trainingId, $coachId)
+        );
+    }
+
+    public static function require_training($trainingId)
+    {
+        if (!self::sees_training($trainingId)) {
+            forbidden('Эта тренировка не в вашем доступе');
+        }
+        return (int) $trainingId;
+    }
+
     public static function require_group($groupId)
     {
         if (!self::sees_group($groupId)) {

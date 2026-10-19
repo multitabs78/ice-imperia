@@ -140,7 +140,7 @@ function check(name, condition, details = '') {
   await page.waitForSelector('.tab', { timeout: 8000 });
   check('верный пароль — вошли', page.url().includes('/cabinet'), page.url());
   check('администратору открылись разделы',
-        (await page.locator('.tab').count()) === 6,
+        (await page.locator('.tab').count()) === 7,
         'разделов: ' + (await page.locator('.tab').count()));
 
   console.log('\nОшибки в консоли');

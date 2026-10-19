@@ -102,6 +102,33 @@ class Repo
         return trim(preg_replace('/\s+/u', ' ', implode(' ', $parts)));
     }
 
+    /**
+     * Цена услуги по коду. Пустая цена — не ноль, а «не задана»:
+     * начисление по такой услуге должно останавливаться
+     * с понятным объяснением, а не списывать ничего молча.
+     */
+    public static function servicePrice($code, $required = true)
+    {
+        $row = Db::row('SELECT name, price FROM services WHERE code = ? AND status = ? LIMIT 1',
+                       array($code, 'active'));
+
+        if (!$row) {
+            if ($required) {
+                conflict('service_missing', 'В справочнике услуг нет записи «' . $code . '»');
+            }
+            return null;
+        }
+        if ($row['price'] === null || $row['price'] === '') {
+            if ($required) {
+                conflict('price_not_set',
+                    'Не задана цена услуги «' . $row['name'] . '». Укажите её в разделе «Услуги»');
+            }
+            return null;
+        }
+
+        return (float) $row['price'];
+    }
+
     /** Возраст в полных годах или null. */
     public static function age($birthDate)
     {

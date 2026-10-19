@@ -539,9 +539,13 @@ return function (Router $router) {
     });
 
     /**
-     * Создаёт тренера и, если задан пароль, сразу учётную
-     * запись. Пароль временный: при первом входе система
-     * потребует задать свой.
+     * Создаёт тренера.
+     *
+     * Три случая. Передали user_id — карточка привязывается
+     * к существующей учётной записи: один человек бывает
+     * и администратором, и тренером, и заводить ему второй
+     * вход незачем. Передали пароль — создаётся новая учётная
+     * запись. Не передали ничего — карточка без входа.
      */
     $router->post('/coaches', function (Request $request) {
         Auth::require_admin();
@@ -553,12 +557,26 @@ return function (Router $router) {
             ->phone('phone', 'Телефон', false)
             ->email('email', 'Почта', false)
             ->text('password', 'Временный пароль', false, 200, 8)
+            ->int('user_id', 'Учётная запись', false, 1)
             ->done();
 
         Db::begin();
 
         $userId = null;
-        if ($data['password'] !== null) {
+
+        if ($data['user_id'] !== null) {
+            $user = Repo::find('users', $data['user_id'], 'Учётная запись');
+
+            $taken = Db::value('SELECT id FROM coaches WHERE user_id = ? LIMIT 1',
+                               array($user['id']));
+            if ($taken) {
+                conflict('user_is_coach', 'К этой учётной записи уже привязана карточка тренера');
+            }
+
+            Dir::addRole($user['id'], 'coach');
+            $userId = (int) $user['id'];
+
+        } elseif ($data['password'] !== null) {
             if ($data['phone'] === null && $data['email'] === null) {
                 invalid(array('email' => 'Для входа нужен телефон или почта'));
             }
@@ -622,6 +640,119 @@ return function (Router $router) {
         }
 
         Response::ok(Dir::person($saved));
+    });
+
+    /**
+     * Пользователи — для выбора, к кому привязать карточку
+     * тренера. Отдаёт только то, что нужно для списка.
+     */
+    $router->get('/users', function (Request $request) {
+        Auth::require_admin();
+
+        list($find, $params) = Repo::search($request->input('q'),
+            array('u.last_name', 'u.first_name', 'u.phone', 'u.email'));
+
+        $where = ' WHERE u.status = ?' . $find;
+        array_unshift($params, 'active');
+
+        if ($request->input('free_coach')) {
+            $where .= ' AND u.id NOT IN (SELECT user_id FROM coaches WHERE user_id IS NOT NULL)';
+        }
+
+        $rows  = Db::all('SELECT u.* FROM users u' . $where
+                       . ' ORDER BY u.last_name, u.first_name LIMIT 200', $params);
+        $items = array();
+        foreach ($rows as $row) {
+            $person = Dir::person($row);
+            $person['roles'] = Auth::rolesOf((int) $row['id']);
+            $items[] = $person;
+        }
+        Response::items($items);
+    });
+
+    /* =====================================================
+       Услуги и цены
+       ===================================================== */
+
+    $router->get('/services', function (Request $request) {
+        Auth::require_admin();
+
+        $status = $request->input('status', 'active');
+        $where  = $status === 'all' ? '' : ' WHERE status = ?';
+        $params = $status === 'all' ? array() : array($status);
+
+        $rows = Db::all('SELECT * FROM services' . $where . ' ORDER BY sort, name', $params);
+
+        $items = array();
+        foreach ($rows as $row) {
+            $items[] = array(
+                'id'        => (int) $row['id'],
+                'code'      => $row['code'],
+                'name'      => $row['name'],
+                'price'     => $row['price'],
+                'price_set' => $row['price'] !== null && $row['price'] !== '',
+                'note'      => $row['note'],
+                'status'    => $row['status'],
+                'sort'      => (int) $row['sort'],
+                'system'    => $row['code'] !== null && $row['code'] !== '',
+            );
+        }
+        Response::items($items);
+    });
+
+    $router->post('/services', function (Request $request) {
+        Auth::require_admin();
+
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', true, 190)
+            ->int('price', 'Цена', false, 0, 1000000)
+            ->text('note', 'Пояснение', false, 255)
+            ->int('sort', 'Порядок', false, 0, 9999)
+            ->done();
+
+        // code задают только миграции: на него ссылается код
+        $id = Repo::create('services', array(
+            'code'       => null,
+            'name'       => $data['name'],
+            'price'      => $data['price'],
+            'note'       => $data['note'],
+            'sort'       => $data['sort'] === null ? 100 : $data['sort'],
+            'status'     => 'active',
+            'updated_by' => Auth::id(),
+            'created_at' => Db::now(),
+        ), 'service');
+
+        Response::ok(Repo::find('services', $id), 201);
+    });
+
+    $router->patch('/services/{id}', function (Request $request, $params) {
+        Auth::require_admin();
+        $service = Repo::find('services', $params['id'], 'Услуга');
+
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', 'present', 190)
+            ->int('price', 'Цена', false, 0, 1000000)
+            ->text('note', 'Пояснение', false, 255)
+            ->int('sort', 'Порядок', false, 0, 9999)
+            ->one_of('status', 'Состояние', array('active', 'archived'), false)
+            ->done();
+
+        // Системную услугу убрать нельзя: на неё ссылается расчёт
+        if ($service['code'] && isset($data['status']) && $data['status'] === 'archived') {
+            conflict('service_is_system',
+                'Эта услуга нужна для расчётов и в архив не убирается. Можно изменить название и цену');
+        }
+
+        $changes = array();
+        foreach ($data as $key => $value) {
+            if ($value !== null) {
+                $changes[$key] = $value;
+            }
+        }
+        $changes['updated_by'] = Auth::id();
+
+        Response::ok(Repo::save('services', $service['id'], $changes, 'service',
+                                $request->input('reason')));
     });
 
     /* =====================================================

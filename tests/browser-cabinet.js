@@ -69,7 +69,7 @@ async function fillSheet(page, values, submitText) {
 
   await page.waitForSelector('.tab', { timeout: 8000 });
   const tabs = await page.locator('.tab').allTextContents();
-  check('администратору видны все шесть разделов', tabs.length === 6, tabs.join(', '));
+  check('администратору видны все разделы', tabs.length === 7, tabs.join(', '));
   check('имя вошедшего в шапке',
         (await page.textContent('#who')).includes('Стефанова'), await page.textContent('#who'));
 
@@ -192,19 +192,66 @@ async function fillSheet(page, values, submitText) {
         !tariffText.includes('Новая цена'));
   await page.screenshot({ path: OUT + '/cab-tariffs.png' });
 
+  console.log('\nУслуги и цены');
+
+  await page.click('.tab:has-text("Услуги")');
+  await page.waitForSelector('.head h1:has-text("Услуги")');
+  const svc = await page.textContent('.board');
+  check('системные услуги видны', svc.includes('Разовое занятие без абонемента')
+        && svc.includes('при действующем абонементе'));
+  check('незаданная цена помечена', svc.includes('не задана'));
+  check('о незаданной цене предупреждает отдельная строка',
+        (await page.textContent('.page')).includes('Пока цены нет'));
+
+  await page.click('tr:has-text("при действующем абонементе") button:has-text("Изменить")');
+  await fillSheet(page, { price: '1200', reason: 'Решение от 20.10' });
+  await page.waitForTimeout(700);
+  check('цена задана',
+        (await page.textContent('tr:has-text("при действующем абонементе")')).includes('1 200'),
+        await page.textContent('tr:has-text("при действующем абонементе")'));
+
+  await page.click('text=Добавить услугу');
+  await fillSheet(page, { name: 'Прокат коньков', price: '300' });
+  await page.waitForTimeout(700);
+  check('своя услуга добавлена', (await page.textContent('.board')).includes('Прокат коньков'));
+  await page.screenshot({ path: OUT + '/cab-services.png' });
+
+  console.log('\nОдин человек в двух ролях');
+
+  await page.click('.tab:has-text("Тренеры")');
+  await page.waitForSelector('.head h1:has-text("Тренеры")');
+  await page.click('text=Добавить тренера');
+  await page.waitForSelector('dialog.sheet[open]');
+  const accounts = await page.locator('dialog.sheet [name=user_id] option').allTextContents();
+  check('в форме есть выбор существующей учётной записи',
+        accounts.some(a => a.includes('Стефанова')), accounts.join(' | '));
+
+  await page.locator('dialog.sheet [name=user_id]')
+            .selectOption({ label: /Стефанова/ })
+            .catch(async () => {
+              const label = accounts.find(a => a.includes('Стефанова'));
+              await page.locator('dialog.sheet [name=user_id]').selectOption({ label });
+            });
+  await fillSheet(page, { last_name: 'Стефанова', first_name: 'Анастасия' });
+  await page.waitForTimeout(800);
+  check('карточка тренера привязана к своей же учётной записи',
+        (await page.textContent('.board')).includes('Стефанова'));
+
   console.log('\nНастройки');
 
   await page.click('.tab:has-text("Настройки")');
   await page.waitForSelector('.head h1:has-text("Настройки")');
   check('настройки показаны',
-        (await page.textContent('.board')).includes('single_lesson_price'));
+        (await page.textContent('.board')).includes('illness_days_threshold'));
 
-  await page.click('tr:has-text("single_lesson_price") button:has-text("Изменить")');
-  await fillSheet(page, { value: '2600', reason: 'Цены с января' });
+  await page.click('tr:has-text("illness_days_threshold") button:has-text("Изменить")');
+  await fillSheet(page, { value: '15', reason: 'Решение школы' });
   await page.waitForTimeout(700);
   check('значение изменилось',
-        (await page.textContent('tr:has-text("single_lesson_price")')).includes('2600'),
-        await page.textContent('tr:has-text("single_lesson_price")'));
+        (await page.textContent('tr:has-text("illness_days_threshold")')).includes('15'),
+        await page.textContent('tr:has-text("illness_days_threshold")'));
+  check('цен в настройках больше нет',
+        !(await page.textContent('.board')).includes('single_lesson_price'));
 
   console.log('\nГраницы доступа тренера');
 
@@ -231,7 +278,10 @@ async function fillSheet(page, values, submitText) {
   check('тренеру видны только два раздела', coachTabs.length === 2, coachTabs.join(', '));
 
   await page.click('.tab:has-text("Группы")');
-  await page.waitForSelector('.rows, .empty');
+  // Ждём именно новый экран: на прежнем тоже есть .rows,
+  // и проверка успевала посчитать строки до перерисовки
+  await page.waitForSelector('.head h1:has-text("Группы")', { timeout: 8000 });
+  await page.waitForSelector('.rows tbody tr, .empty', { timeout: 8000 });
   check('тренер видит только свою группу',
         (await page.locator('.rows tbody tr').count()) === 1,
         'строк: ' + (await page.locator('.rows tbody tr').count()));
