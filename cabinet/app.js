@@ -875,8 +875,13 @@
             : el('span', { class: 'pill pill--warn' }, 'без входа')),
           el('td', null, c.status === 'archived'
             ? el('span', { class: 'pill pill--off' }, 'в архиве') : ''),
-          el('td', { class: 'act' },
-             el('button', { class: 'linkish', onclick: function () { editCoach(c); } }, 'Изменить'))
+          el('td', { class: 'act' }, [
+             el('button', { class: 'linkish',
+               onclick: function () { editCoach(c); } }, 'Изменить'),
+             document.createTextNode(' '),
+             el('button', { class: 'linkish',
+               onclick: function () { handover(c); } }, 'Передать группы')
+           ])
         ]);
       });
 
@@ -927,6 +932,45 @@
             toast('Тренер добавлен');
             screenCoaches();
           });
+        }
+      });
+    });
+  }
+
+  /**
+   * Передача групп другому тренеру. Один ушёл, другой принял —
+   * и это одно действие вместо обхода всех групп и занятий.
+   */
+  function handover(c) {
+    api('GET', '/coaches').then(function (answer) {
+      var others = (answer.data.items || [])
+        .filter(function (one) { return one.id !== c.id && one.status === 'active'; })
+        .map(function (one) { return { value: one.id, label: one.name }; });
+
+      if (!others.length) {
+        toast('Передать некому: других тренеров нет', true);
+        return;
+      }
+
+      openSheet({
+        title: 'Передать группы',
+        note: 'Группы, постоянное расписание и будущие занятия перейдут другому тренеру. '
+            + 'Проведённые занятия останутся за ' + c.name + ' — по ним считаются выплаты.',
+        submit: 'Передать',
+        fields: [
+          { name: 'to_coach_id', label: 'Кому', type: 'select', options: others },
+          { name: 'from_date', label: 'С какого числа', type: 'date',
+            value: isoDate(new Date()) },
+          { name: 'reason', label: 'Основание', placeholder: 'Уволился' }
+        ],
+        onSubmit: function (values) {
+          return api('POST', '/coaches/' + c.id + '/handover', values)
+            .then(function (result) {
+              if (!result.ok) { return result; }
+              toast('Передано: групп ' + result.data.groups
+                    + ', занятий ' + result.data.trainings);
+              screenCoaches();
+            });
         }
       });
     });
@@ -1285,21 +1329,27 @@
     });
   }
 
+  /**
+   * Карточка занятия в неделе. Только самое нужное: время,
+   * площадка, группа, тренер. Всё остальное — на карточке
+   * занятия, которая открывается по нажатию: в колонке дня
+   * шириной в полтора пальца список кнопок читать невозможно.
+   */
   function trainingCard(t) {
-    var card = el('div', { class: 'tr tr--' + t.status });
-    t.future = t.date > isoDate(new Date());
+    var card = el('a', {
+      class: 'tr tr--' + t.status,
+      href: '#/training/' + t.id,
+      title: [t.group_name, t.spot_name, t.venue_name, t.coach_name]
+               .filter(Boolean).join(' · ')
+    });
 
-    // Время и группа в одну строку: в узкой колонке дня
-    // каждая лишняя строка заметна
     card.appendChild(el('div', { class: 'tr__head' }, [
       el('span', { class: 'tr__time' }, t.time_start),
-      el('b', null, t.group_code)
+      el('span', { class: 'tr__spot' }, t.spot_name || t.kind_name)
     ]));
-    card.appendChild(el('div', { class: 'tr__main' }, [
-      el('span', { class: 'tr__sub' },
-         [t.kind_name, t.venue_name, t.coach_name || 'тренер не назначен']
-           .filter(Boolean).join(' · '))
-    ]));
+    card.appendChild(el('b', { class: 'tr__group' }, t.group_code));
+    card.appendChild(el('span', { class: 'tr__sub' },
+      t.coach_name || 'тренер не назначен'));
 
     var marks = el('div', { class: 'tr__marks' });
     if (t.substitute) { marks.appendChild(el('span', { class: 'pill' }, 'замена')); }
@@ -1312,36 +1362,10 @@
     if (t.status === 'held') {
       marks.appendChild(el('span', { class: 'pill' }, 'проведена'));
     }
+    if (t.status === 'planned' && t.date < isoDate(new Date())) {
+      marks.appendChild(el('span', { class: 'pill pill--warn' }, 'не отмечена'));
+    }
     card.appendChild(marks);
-
-    if (t.cancel_reason) {
-      card.appendChild(el('div', { class: 'tr__why', text: t.cancel_reason }));
-    }
-
-    // Прошедшее занятие — прежде всего повод его отметить
-    if (t.status === 'planned' && !t.future) {
-      card.appendChild(el('div', { class: 'tr__act' }, [
-        el('a', { class: 'linkish linkish--strong', href: '#/training/' + t.id }, 'Отметить')
-      ]));
-    }
-    if (t.status === 'held') {
-      card.appendChild(el('div', { class: 'tr__act' }, [
-        el('a', { class: 'linkish', href: '#/training/' + t.id }, 'Открыть отметки')
-      ]));
-    }
-
-    if (t.status === 'planned') {
-      var act = el('div', { class: 'tr__act' });
-      act.appendChild(el('button', { class: 'linkish',
-        onclick: function () { setTrainingCoach(t); } }, 'Заменить тренера'));
-      if (can(['admin'])) {
-        act.appendChild(el('button', { class: 'linkish',
-          onclick: function () { moveTraining(t); } }, 'Перенести'));
-        act.appendChild(el('button', { class: 'linkish linkish--danger',
-          onclick: function () { cancelTraining(t); } }, 'Отменить'));
-      }
-      card.appendChild(act);
-    }
 
     return card;
   }
@@ -1408,7 +1432,7 @@
           .then(function (answer) {
             if (!answer.ok) { return answer; }
             toast('Занятие отменено');
-            screenSchedule(t.date);
+            screenTraining(t.id);
           });
       }
     });
@@ -1429,7 +1453,7 @@
         return api('POST', '/trainings/' + t.id + '/move', values).then(function (answer) {
           if (!answer.ok) { return answer; }
           toast('Занятие перенесено');
-          screenSchedule(values.date);
+          window.location.hash = '#/training/' + answer.data.training.id;
         });
       }
     });
@@ -1460,7 +1484,7 @@
           return api('POST', '/trainings/' + t.id + '/coach', values).then(function (result) {
             if (!result.ok) { return result; }
             toast('Тренер назначен');
-            screenSchedule(t.date);
+            screenTraining(t.id);
           });
         }
       });
@@ -1499,10 +1523,13 @@
           ])
         ]);
         if (can(['admin'])) {
-          line.appendChild(el('button', {
-            class: 'linkish linkish--danger line__act',
-            onclick: function () { closeRule(g, r); }
-          }, 'Убрать'));
+          line.appendChild(el('span', { class: 'line__act' }, [
+            el('button', { class: 'linkish',
+              onclick: function () { editRule(g, r); } }, 'Изменить'),
+            document.createTextNode(' '),
+            el('button', { class: 'linkish linkish--danger',
+              onclick: function () { closeRule(g, r); } }, 'Убрать')
+          ]));
         }
         body.appendChild(line);
       });
@@ -1511,13 +1538,27 @@
     return pane;
   }
 
+  /** Площадки всех комплексов одним списком для выбора. */
+  function spotOptions(venues) {
+    var out = [];
+    var many = venues.length > 1;
+
+    venues.forEach(function (v) {
+      (v.spots || []).forEach(function (sp) {
+        if (sp.status !== 'active') { return; }
+        // Название комплекса добавляем, только когда их
+        // несколько: с одной ареной это лишний шум
+        out.push({ value: sp.id, label: many ? v.name + ' · ' + sp.name : sp.name });
+      });
+    });
+    return out;
+  }
+
   function newRule(g) {
     Promise.all([api('GET', '/venues'), api('GET', '/coaches')]).then(function (results) {
-      var venues = (results[0].data.items || []).map(function (v) {
-        return { value: v.id, label: v.name };
-      });
+      var venues = spotOptions(results[0].data.items || []);
       if (!venues.length) {
-        toast('Сначала заведите площадку', true);
+        toast('Сначала заведите площадку в настройках', true);
         return;
       }
       var coaches = [{ value: '', label: 'из тренеров группы' }].concat(
@@ -1542,7 +1583,7 @@
             { value: 'gym', label: 'зал' },
             { value: 'choreo', label: 'хореография' }
           ] },
-          { name: 'venue_id', label: 'Площадка', type: 'select', options: venues },
+          { name: 'spot_id', label: 'Где', type: 'select', options: venues },
           { name: 'coach_id', label: 'Тренер', type: 'select', options: coaches },
           { name: 'valid_from', label: 'Действует с', type: 'date',
             value: isoDate(new Date()) }
@@ -1552,6 +1593,67 @@
           return api('POST', '/groups/' + g.id + '/schedule', values).then(function (answer) {
             if (!answer.ok) { return answer; }
             toast('Добавлено в расписание');
+            screenGroup(g.id);
+          });
+        }
+      });
+    });
+  }
+
+  /**
+   * Правка правила. Главный вопрос здесь — что делать
+   * с уже созданными занятиями: перенести изменение на них
+   * или оставить как есть. Ради первого правка обычно
+   * и затевается — уволился тренер, пришёл новый.
+   */
+  function editRule(g, r) {
+    Promise.all([api('GET', '/venues'), api('GET', '/coaches')]).then(function (results) {
+      var spots = spotOptions(results[0].data.items || []);
+      var coaches = [{ value: '', label: 'не менять' }].concat(
+        (results[1].data.items || []).map(function (c) {
+          return { value: c.id, label: c.name };
+        }));
+
+      var days = [];
+      for (var i = 1; i <= 7; i++) { days.push({ value: i, label: DAYS[i] }); }
+
+      openSheet({
+        title: 'Изменить занятие в расписании',
+        note: 'Поставьте дату в «Перенести на занятия с», чтобы изменение дошло '
+            + 'до уже созданных занятий. Проведённые и отменённые не тронутся никогда.',
+        fields: [
+          { name: 'weekday', label: 'День недели', type: 'select',
+            value: r.weekday, options: days },
+          { name: 'time_start', label: 'Время начала', type: 'time', value: r.time_start },
+          { name: 'duration_min', label: 'Длительность, минут', type: 'number',
+            value: r.duration_min },
+          { name: 'kind', label: 'Вид занятия', type: 'select', value: r.kind, options: [
+            { value: 'ice', label: 'лёд' },
+            { value: 'gym', label: 'зал' },
+            { value: 'choreo', label: 'хореография' }
+          ] },
+          { name: 'spot_id', label: 'Где', type: 'select', value: r.spot_id, options: spots },
+          { name: 'coach_id', label: 'Тренер', type: 'select', value: r.coach_id || '',
+            options: coaches },
+          { name: 'apply_from', label: 'Перенести на занятия с', type: 'date',
+            hint: 'Пусто — поменять только шаблон, занятия оставить как есть' },
+          { name: 'reason', label: 'Основание', placeholder: 'Для журнала' }
+        ],
+        onSubmit: function (values) {
+          if (!values.coach_id) { delete values.coach_id; }
+          if (!values.apply_from) { delete values.apply_from; }
+
+          return api('PATCH', '/schedule-rules/' + r.id, values).then(function (answer) {
+            if (!answer.ok) { return answer; }
+
+            var n = answer.data.applied;
+            var bad = answer.data.clashes || [];
+            toast(n ? 'Изменено, затронуто занятий: ' + n : 'Шаблон изменён');
+            if (bad.length) {
+              setTimeout(function () {
+                toast('Не перенеслись ' + bad.length + ': ' + bad[0].reason, true);
+              }, 1200);
+            }
             screenGroup(g.id);
           });
         }
@@ -1605,7 +1707,32 @@
 
       box.appendChild(backLink('schedule/' + t.date, 'Расписание'));
       box.appendChild(heading(t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start,
-        [t.kind_name, t.venue_name, t.coach_name].filter(Boolean).join(' · '), []));
+        [t.spot_name || t.kind_name, t.coach_name || 'тренер не назначен']
+          .filter(Boolean).join(' · '),
+        trainingActions(t)));
+
+      var state = el('div', { class: 'tr__marks' });
+      if (t.substitute) { state.appendChild(el('span', { class: 'pill' }, 'замена')); }
+      if (t.status === 'cancelled') {
+        state.appendChild(el('span', { class: 'pill pill--warn' }, 'отменена'));
+      }
+      if (t.status === 'moved') {
+        state.appendChild(el('span', { class: 'pill pill--off' }, 'перенесена'));
+      }
+      if (t.status === 'held') {
+        state.appendChild(el('span', { class: 'pill' }, 'проведена'));
+      }
+      if (state.childNodes.length) { box.appendChild(state); }
+
+      if (t.cancel_reason) {
+        box.appendChild(el('p', { class: 'field__note', text: t.cancel_reason }));
+      }
+      if (t.moved_to) {
+        box.appendChild(el('p', { class: 'field__note' }, [
+          document.createTextNode('Перенесена сюда: '),
+          el('a', { class: 'linkish', href: '#/training/' + t.moved_to }, 'новое занятие')
+        ]));
+      }
 
       if (!sheet.can_mark) {
         box.appendChild(el('p', { class: 'alert alert--calm', text: sheet.closed_why }));
@@ -1702,6 +1829,23 @@
       ]);
       box.appendChild(bar);
     });
+  }
+
+  /** Что можно сделать с занятием. Решает роль и состояние. */
+  function trainingActions(t) {
+    var acts = [];
+    if (t.status !== 'planned') { return acts; }
+
+    acts.push(el('button', { class: 'btn btn--ghost btn--small',
+      onclick: function () { setTrainingCoach(t); } }, 'Заменить тренера'));
+
+    if (can(['admin'])) {
+      acts.push(el('button', { class: 'btn btn--ghost btn--small',
+        onclick: function () { moveTraining(t); } }, 'Перенести'));
+      acts.push(el('button', { class: 'btn btn--ghost btn--small btn--danger',
+        onclick: function () { cancelTraining(t); } }, 'Отменить'));
+    }
+    return acts;
   }
 
   function saveMarks(t, sheet, chosen) {
@@ -2064,19 +2208,28 @@
     });
   }
 
-  /** Площадки: их мало и заводят их однажды, отдельный раздел им ни к чему. */
+  /**
+   * Спорткомплексы и площадки внутри них.
+   *
+   * Два уровня, потому что занятие проходит не «в здании»,
+   * а на конкретном льду или в зале с номером. Комплексов
+   * мало и заводят их однажды, поэтому живут они здесь,
+   * а не отдельным разделом.
+   */
   function venuesPane() {
     var pane = el('div', { class: 'pane' }, [
-      el('h2', null, 'Площадки'),
+      el('h2', null, 'Спорткомплексы и площадки'),
       el('p', { class: 'field__note', text:
-        'Где проходят занятия. На площадку ссылается расписание, и по ней система '
-        + 'видит, что лёд в это время уже занят.' })
+        'Комплекс — здание с адресом. Площадка — то, где реально стоят люди: '
+        + 'лёд, зал с номером, хореографический класс. Расписание ссылается '
+        + 'на площадку.' })
     ]);
 
     var body = el('div');
     pane.appendChild(body);
     pane.appendChild(el('div', { class: 'sheet__act' }, [
-      el('button', { class: 'btn btn--ghost btn--small', onclick: newVenue }, 'Добавить площадку')
+      el('button', { class: 'btn btn--ghost btn--small', onclick: newVenue },
+         'Добавить комплекс')
     ]));
 
     api('GET', '/venues').then(function (answer) {
@@ -2084,16 +2237,42 @@
       clear(body);
 
       if (!venues.length) {
-        body.appendChild(el('p', { class: 'empty', text: 'Площадок пока нет' }));
+        body.appendChild(el('p', { class: 'empty', text: 'Комплексов пока нет' }));
         return;
       }
+
       venues.forEach(function (v) {
-        body.appendChild(el('div', { class: 'line' }, [
+        var head = el('div', { class: 'line' }, [
           el('div', { class: 'line__main' }, [
-            el('span', null, v.name),
+            el('b', null, v.name),
             el('span', { class: 'line__sub' }, v.address || 'адрес не указан')
+          ]),
+          el('span', { class: 'line__act' }, [
+            el('button', { class: 'linkish',
+              onclick: function () { editVenue(v); } }, 'Изменить'),
+            document.createTextNode(' '),
+            el('button', { class: 'linkish',
+              onclick: function () { newSpot(v); } }, 'Добавить площадку')
           ])
-        ]));
+        ]);
+        body.appendChild(head);
+
+        var spots = el('div', { class: 'spots' });
+        if (!v.spots.length) {
+          spots.appendChild(el('p', { class: 'field__note',
+            text: 'Площадок нет — расписание сюда не поставить' }));
+        }
+        v.spots.forEach(function (sp) {
+          spots.appendChild(el('div', { class: 'spot' }, [
+            el('span', { class: 'spot__name' }, sp.name),
+            el('span', { class: 'spot__kind' }, sp.kind === 'ice' ? 'лёд' : 'зал'),
+            sp.status === 'archived'
+              ? el('span', { class: 'pill pill--off' }, 'в архиве') : null,
+            el('button', { class: 'linkish spot__act',
+              onclick: function () { editSpot(v, sp); } }, 'Изменить')
+          ]));
+        });
+        body.appendChild(spots);
       });
     });
 
@@ -2102,7 +2281,8 @@
 
   function newVenue() {
     openSheet({
-      title: 'Новая площадка',
+      title: 'Новый спорткомплекс',
+      note: 'Здание целиком. Отдельные льды и залы добавляются внутрь него.',
       submit: 'Добавить',
       fields: [
         { name: 'name', label: 'Название', placeholder: 'Гололёд' },
@@ -2111,7 +2291,74 @@
       onSubmit: function (values) {
         return api('POST', '/venues', values).then(function (answer) {
           if (!answer.ok) { return answer; }
+          toast('Комплекс добавлен. Теперь добавьте в него площадки');
+          screenSettings();
+        });
+      }
+    });
+  }
+
+  function editVenue(v) {
+    openSheet({
+      title: 'Изменить комплекс',
+      fields: [
+        { name: 'name', label: 'Название', value: v.name },
+        { name: 'address', label: 'Адрес', value: v.address }
+      ],
+      onSubmit: function (values) {
+        return api('PATCH', '/venues/' + v.id, values).then(function (answer) {
+          if (!answer.ok) { return answer; }
+          toast('Сохранено');
+          screenSettings();
+        });
+      }
+    });
+  }
+
+  function newSpot(v) {
+    openSheet({
+      title: 'Площадка в «' + v.name + '»',
+      note: 'Лёд, зал с номером, хореографический класс — то, что указывается '
+          + 'в расписании.',
+      submit: 'Добавить',
+      fields: [
+        { name: 'name', label: 'Название', placeholder: 'Лёд, Зал 2' },
+        { name: 'kind', label: 'Что это', type: 'select', options: [
+          { value: 'ice', label: 'лёд' },
+          { value: 'hall', label: 'зал' }
+        ] },
+        { name: 'note', label: 'Пояснение, если нужно' }
+      ],
+      onSubmit: function (values) {
+        return api('POST', '/venues/' + v.id + '/spots', values).then(function (answer) {
+          if (!answer.ok) { return answer; }
           toast('Площадка добавлена');
+          screenSettings();
+        });
+      }
+    });
+  }
+
+  function editSpot(v, sp) {
+    openSheet({
+      title: 'Изменить площадку',
+      fields: [
+        { name: 'name', label: 'Название', value: sp.name },
+        { name: 'kind', label: 'Что это', type: 'select', value: sp.kind, options: [
+          { value: 'ice', label: 'лёд' },
+          { value: 'hall', label: 'зал' }
+        ] },
+        { name: 'note', label: 'Пояснение', value: sp.note },
+        { name: 'status', label: 'Состояние', type: 'select', value: sp.status, options: [
+          { value: 'active', label: 'работает' },
+          { value: 'archived', label: 'в архиве' }
+        ] },
+        { name: 'reason', label: 'Основание', placeholder: 'Для журнала' }
+      ],
+      onSubmit: function (values) {
+        return api('PATCH', '/spots/' + sp.id, values).then(function (answer) {
+          if (!answer.ok) { return answer; }
+          toast('Сохранено');
           screenSettings();
         });
       }

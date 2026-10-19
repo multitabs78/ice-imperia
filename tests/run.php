@@ -400,6 +400,12 @@ $r = call('POST', '/groups/' . $group1 . '/coaches', array('coach_id' => $coach)
 check('тренер закреплён за группой', $r['status'] === 200 && count($r['body']['items']) === 1,
       $r['raw']);
 
+$r = call('POST', '/coaches', array(
+    'last_name' => 'Мухаметзянова', 'first_name' => 'Алина'), $admin);
+$coach2base = $r['body']['id'];
+check('второй тренер заведён без входа в кабинет',
+      $r['status'] === 201 && empty($r['body']['has_login']), $r['raw']);
+
 echo "\nПеревод между группами\n";
 
 $r = call('POST', '/enrollments', array(
@@ -628,7 +634,29 @@ echo "\nПостоянное расписание\n";
 
 $r = call('POST', '/venues', array('name' => 'Гололёд', 'address' => 'ул. Свободы, 15'), $admin);
 $venue = isset($r['body']['id']) ? $r['body']['id'] : null;
-check('площадка создана', $r['status'] === 201 && $venue, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('спорткомплекс создан', $r['status'] === 201 && $venue, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/venues/' . $venue . '/spots',
+          array('name' => 'Лёд', 'kind' => 'ice'), $admin);
+$spot = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('площадка внутри комплекса создана', $r['status'] === 201 && $spot,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/venues/' . $venue . '/spots',
+          array('name' => 'Зал 2', 'kind' => 'hall'), $admin);
+$hall = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('зал с номером добавлен', $r['status'] === 201 && $hall, 'код ' . $r['status']);
+
+$r = call('POST', '/venues/' . $venue . '/spots',
+          array('name' => 'Лёд', 'kind' => 'ice'), $admin);
+check('двух площадок с одним названием не бывает', $r['status'] === 409
+      && $r['body']['error'] === 'spot_exists', 'код ' . $r['status']);
+
+$r = call('GET', '/venues', null, $admin);
+$found = null;
+foreach ($r['body']['items'] as $one) { if ((int) $one['id'] === (int) $venue) { $found = $one; } }
+check('комплекс отдаётся вместе со своими площадками',
+      $found && count($found['spots']) === 2, $r['raw']);
 
 // Считаем от ближайшего понедельника: иначе проверки
 // зависят от того, в какой день недели их запустили
@@ -637,7 +665,7 @@ $season = date('Y-m-d', strtotime($monday . ' -30 days'));
 
 $r = call('POST', '/groups/' . $group1 . '/schedule', array(
     'weekday' => 1, 'time_start' => '17:00', 'duration_min' => 60,
-    'kind' => 'ice', 'venue_id' => $venue, 'coach_id' => $coach,
+    'kind' => 'ice', 'spot_id' => $spot, 'coach_id' => $coach,
     'valid_from' => $season), $admin);
 $rule1 = isset($r['body']['id']) ? $r['body']['id'] : null;
 check('правило расписания создано', $r['status'] === 201 && $rule1,
@@ -648,23 +676,23 @@ check('день недели назван словом', isset($r['body']['weekd
 
 $r = call('POST', '/groups/' . $group1 . '/schedule', array(
     'weekday' => 1, 'time_start' => '17:00', 'kind' => 'ice',
-    'venue_id' => $venue, 'valid_from' => $season), $admin);
+    'spot_id' => $spot, 'valid_from' => $season), $admin);
 check('повтор того же дня и времени — 409', $r['status'] === 409
       && $r['body']['error'] === 'rule_exists', 'код ' . $r['status']);
 
 $r = call('POST', '/groups/' . $group1 . '/schedule', array(
     'weekday' => 8, 'time_start' => '17:00', 'kind' => 'ice',
-    'venue_id' => $venue, 'valid_from' => $season), $admin);
+    'spot_id' => $spot, 'valid_from' => $season), $admin);
 check('восьмого дня недели не бывает', $r['status'] === 422, 'код ' . $r['status']);
 
 $r = call('POST', '/groups/' . $group1 . '/schedule', array(
     'weekday' => 3, 'time_start' => '25:00', 'kind' => 'ice',
-    'venue_id' => $venue, 'valid_from' => $season), $admin);
+    'spot_id' => $spot, 'valid_from' => $season), $admin);
 check('время 25:00 не принимается', $r['status'] === 422, 'код ' . $r['status']);
 
 $r = call('POST', '/groups/' . $group1 . '/schedule', array(
     'weekday' => 3, 'time_start' => '18:30', 'kind' => 'ice',
-    'venue_id' => $venue, 'coach_id' => $coach, 'valid_from' => $season), $admin);
+    'spot_id' => $spot, 'coach_id' => $coach, 'valid_from' => $season), $admin);
 $rule2 = $r['body']['id'];
 check('второе занятие в неделю добавлено', $r['status'] === 201);
 
@@ -687,27 +715,72 @@ check('повторный запуск ничего не плодит',
       $r['body']['created'] === 0 && $r['body']['existed'] === 4,
       'создано ' . $r['body']['created'] . ', было ' . $r['body']['existed']);
 
-// Вторая группа на тот же лёд в то же время
+// Вторая группа на тот же лёд в то же время — это норма:
+// на льду одновременно работает несколько тренеров
 $r = call('POST', '/groups/' . $group2 . '/schedule', array(
     'weekday' => 1, 'time_start' => '17:00', 'kind' => 'ice',
-    'venue_id' => $venue, 'valid_from' => $season), $admin);
-check('правило со встречным временем само по себе создаётся', $r['status'] === 201);
+    'spot_id' => $spot, 'coach_id' => $coach2base, 'valid_from' => $season), $admin);
+check('вторая группа встаёт на тот же лёд', $r['status'] === 201,
+      'код ' . $r['status'] . ' ' . $r['raw']);
 
 $r = call('POST', '/schedule/generate', array('group_id' => $group2, 'weeks' => 2,
                                               'from' => $monday), $admin);
-check('занятый лёд не занимается дважды',
+check('одну площадку делят свободно',
+      $r['body']['created'] === 2 && count($r['body']['skipped']) === 0,
+      'создано ' . $r['body']['created'] . ', пропущено ' . count($r['body']['skipped']));
+
+// А вот один человек в двух местах сразу — ошибка
+$r = call('POST', '/groups', array('code' => 'ТЭ-1', 'name' => 'Тренировочная'), $admin);
+$group3 = $r['body']['id'];
+$r = call('POST', '/groups/' . $group3 . '/schedule', array(
+    'weekday' => 1, 'time_start' => '17:00', 'kind' => 'gym',
+    'spot_id' => $hall, 'coach_id' => $coach, 'valid_from' => $season), $admin);
+check('правило в зале создаётся', $r['status'] === 201, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/schedule/generate', array('group_id' => $group3, 'weeks' => 2,
+                                              'from' => $monday), $admin);
+check('тренер не раздваивается между льдом и залом',
       $r['body']['created'] === 0 && count($r['body']['skipped']) === 2,
       'создано ' . $r['body']['created'] . ', пропущено ' . count($r['body']['skipped']));
 check('пропуск объяснён словами',
       isset($r['body']['skipped'][0]['reason'])
-      && strpos($r['body']['skipped'][0]['reason'], 'на льду') !== false,
+      && strpos($r['body']['skipped'][0]['reason'], 'тренер') !== false,
       isset($r['body']['skipped'][0]['reason']) ? $r['body']['skipped'][0]['reason'] : '—');
+
+// Но две группы у одного тренера на одной площадке — это
+// объединённое занятие, а не ошибка. Проверяем на других
+// группах, чтобы не путать расписание первой
+$r = call('POST', '/groups/' . $group2 . '/schedule', array(
+    'weekday' => 2, 'time_start' => '17:00', 'kind' => 'ice',
+    'spot_id' => $spot, 'coach_id' => $coach2base, 'valid_from' => $season), $admin);
+check('правило второй группы на вторник создано', $r['status'] === 201);
+
+$r = call('POST', '/groups/' . $group3 . '/schedule', array(
+    'weekday' => 2, 'time_start' => '17:00', 'kind' => 'ice',
+    'spot_id' => $spot, 'coach_id' => $coach2base, 'valid_from' => $season), $admin);
+check('две группы одного тренера на одной площадке допустимы',
+      $r['status'] === 201, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/schedule/generate', array('group_id' => $group3, 'weeks' => 2,
+                                              'from' => $monday), $admin);
+check('объединённое занятие генерируется', $r['body']['created'] === 2,
+      'создано ' . $r['body']['created'] . ', пропущено ' . count($r['body']['skipped']));
 
 $r = call('GET', '/trainings?from=' . $monday . '&to='
           . date('Y-m-d', strtotime($monday . ' +13 days')), null, $admin);
-$trainings = $r['body']['items'];
-check('тренировки видны администратору', $r['status'] === 200 && count($trainings) === 4,
-      'тренировок: ' . count($trainings));
+$all = $r['body']['items'];
+check('тренировки видны администратору', $r['status'] === 200 && count($all) >= 8,
+      'тренировок: ' . count($all));
+
+// Дальше работаем только с занятиями первой группы
+$trainings = array();
+foreach ($all as $one) {
+    if ((int) $one['group_id'] === (int) $group1) { $trainings[] = $one; }
+}
+check('у первой группы четыре занятия на две недели', count($trainings) === 4,
+      'занятий: ' . count($trainings));
+check('в занятии видна площадка, а не только комплекс',
+      $trainings[0]['spot_name'] === 'Лёд', $r['raw']);
 check('у тренировки есть название группы и площадки',
       $trainings[0]['group_code'] === 'СОГ-1' && $trainings[0]['venue_name'] === 'Гололёд',
       json_encode($trainings[0], JSON_UNESCAPED_UNICODE));
@@ -812,6 +885,144 @@ check('в своих занятиях у заменяющего ровно од�
       $r['status'] === 200 && count($r['body']['items']) === 1,
       'занятий: ' . count($r['body']['items']));
 
+echo "\nПравка расписания без пересоздания\n";
+
+$r = call('PATCH', '/schedule-rules/' . $rule1, array(
+    'time_start' => '18:00', 'reason' => 'Сдвинули лёд'), $admin);
+check('время в правиле поменялось', $r['status'] === 200
+      && $r['body']['time_start'] === '18:00', 'код ' . $r['status'] . ' ' . $r['raw']);
+check('без указания даты занятия не тронуты', $r['body']['applied'] === 0,
+      'перенесено: ' . $r['body']['applied']);
+
+$still = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE rule_id = ' . (int) $rule1
+                           . ' AND time_start = "17:00:00"')->fetchColumn();
+check('и правда остались на прежнем времени', $still > 0, 'занятий: ' . $still);
+
+$r = call('PATCH', '/schedule-rules/' . $rule1, array(
+    'time_start' => '18:30', 'apply_from' => $monday,
+    'reason' => 'Переносим и занятия'), $admin);
+check('с датой изменение доходит до занятий', $r['status'] === 200
+      && $r['body']['applied'] > 0, 'перенесено: ' . $r['body']['applied']);
+
+$moved = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE rule_id = ' . (int) $rule1
+                           . ' AND time_start = "18:30:00"')->fetchColumn();
+check('занятия встали на новое время', $moved > 0, 'занятий: ' . $moved);
+
+$held = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE rule_id = ' . (int) $rule1
+                          . ' AND status <> "planned" AND time_start = "18:30:00"')->fetchColumn();
+check('проведённые и отменённые не переписаны', $held === 0, 'задето: ' . $held);
+
+$r = call('PATCH', '/schedule-rules/' . $rule1, array(
+    'spot_id' => $hall, 'apply_from' => $monday, 'reason' => 'Переехали в зал'), $admin);
+check('площадку тоже можно сменить разом', $r['status'] === 200
+      && $r['body']['spot_name'] === 'Зал 2', $r['raw']);
+
+// Второй комплекс: только на нём и видно, что комплекс
+// следует за площадкой, а не остаётся прежним
+$r = call('POST', '/venues', array('name' => 'Юбилейный', 'address' => 'пр. Добролюбова, 18'), $admin);
+$venue2 = $r['body']['id'];
+$r = call('POST', '/venues/' . $venue2 . '/spots',
+          array('name' => 'Малая арена', 'kind' => 'ice'), $admin);
+$spot2 = $r['body']['id'];
+
+$r = call('PATCH', '/schedule-rules/' . $rule1, array(
+    'spot_id' => $spot2, 'reason' => 'Другая арена'), $admin);
+check('переезд в другой комплекс принят', $r['status'] === 200
+      && $r['body']['spot_name'] === 'Малая арена', $r['raw']);
+
+$venueToo = $pdo->query('SELECT venue_id FROM schedule_rules WHERE id = ' . (int) $rule1)
+                ->fetchColumn();
+check('комплекс подтянулся за площадкой', (int) $venueToo === (int) $venue2,
+      'комплекс ' . $venueToo . ', ожидали ' . $venue2);
+
+$r = call('PATCH', '/schedule-rules/' . $rule1, array('spot_id' => 999999), $admin);
+check('несуществующей площадки нет', $r['status'] === 404, 'код ' . $r['status']);
+
+$r = call('PATCH', '/spots/' . $spot . '?reason=' . rawurlencode('Закрываем'),
+          array('status' => 'archived'), $admin);
+check('площадку с будущими занятиями в архив не убрать', $r['status'] === 409
+      && $r['body']['error'] === 'spot_in_use', 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('PATCH', '/spots/' . $spot2, array('status' => 'archived'), $admin);
+check('свободную площадку убрать можно', $r['status'] === 200, 'код ' . $r['status']);
+
+$r = call('POST', '/groups/' . $group1 . '/schedule', array(
+    'weekday' => 6, 'time_start' => '10:00', 'kind' => 'ice',
+    'spot_id' => $spot2, 'valid_from' => $season), $admin);
+check('на архивную площадку расписание не поставить', $r['status'] === 409
+      && $r['body']['error'] === 'spot_archived', 'код ' . $r['status']);
+
+call('PATCH', '/spots/' . $spot2, array('status' => 'active'), $admin);
+
+// Возвращаем обратно, чтобы дальнейшие проверки шли по льду
+call('PATCH', '/schedule-rules/' . $rule1, array(
+    'spot_id' => $spot, 'apply_from' => $monday, 'reason' => 'Обратно на лёд'), $admin);
+
+$r = call('PATCH', '/schedule-rules/' . $rule1, array('coach_id' => 999999), $admin);
+check('несуществующего тренера не поставить', $r['status'] === 404, 'код ' . $r['status']);
+
+echo "\nПередача групп новому тренеру\n";
+
+// Отдельная пара тренеров и своя группа: передача меняет
+// закрепления целиком, и трогать ею общие проверки нельзя
+$r = call('POST', '/coaches', array('last_name' => 'Уволин', 'first_name' => 'Олег'), $admin);
+$quit = $r['body']['id'];
+$r = call('POST', '/coaches', array('last_name' => 'Новиков', 'first_name' => 'Егор'), $admin);
+$fresh = $r['body']['id'];
+
+$r = call('POST', '/groups', array('code' => 'ПЕР-1', 'name' => 'Для передачи'), $admin);
+$groupH = $r['body']['id'];
+call('POST', '/groups/' . $groupH . '/coaches', array('coach_id' => $quit), $admin);
+call('POST', '/groups/' . $groupH . '/schedule', array(
+    'weekday' => 4, 'time_start' => '16:00', 'kind' => 'ice',
+    'spot_id' => $spot, 'coach_id' => $quit, 'valid_from' => $season), $admin);
+call('POST', '/schedule/generate', array('group_id' => $groupH, 'weeks' => 2,
+                                         'from' => $monday), $admin);
+
+$r = call('POST', '/coaches/' . $quit . '/handover', array(
+    'to_coach_id' => $quit, 'reason' => 'Ошибка'), $admin);
+check('самому себе не передать', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('POST', '/coaches/' . $quit . '/handover', array(
+    'to_coach_id' => $fresh), $admin);
+check('без основания не передаём', $r['status'] === 422, 'код ' . $r['status']);
+
+$beforeGroups = (int) $pdo->query('SELECT COUNT(*) FROM group_coaches WHERE coach_id = '
+                                  . (int) $quit)->fetchColumn();
+$future0 = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE coach_id = ' . (int) $quit
+                             . ' AND status = "planned"')->fetchColumn();
+
+// Одно занятие делаем проведённым: оно должно остаться за ним
+$pdo->exec('UPDATE trainings SET status = "held" WHERE coach_id = ' . (int) $quit . ' LIMIT 1');
+$pastHeld = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE coach_id = ' . (int) $quit
+                              . ' AND status = "held"')->fetchColumn();
+
+$r = call('POST', '/coaches/' . $quit . '/handover', array(
+    'to_coach_id' => $fresh, 'reason' => 'Уволился, принял другой'), $admin);
+check('группы переданы', $r['status'] === 200 && $r['body']['groups'] === $beforeGroups,
+      'передано ' . (isset($r['body']['groups']) ? $r['body']['groups'] : '—')
+      . ' из ' . $beforeGroups);
+check('и расписание вместе с ними', $r['body']['rules'] > 0,
+      'правил: ' . $r['body']['rules']);
+
+$left = (int) $pdo->query('SELECT COUNT(*) FROM group_coaches WHERE coach_id = '
+                          . (int) $quit)->fetchColumn();
+check('за прежним тренером групп не осталось', $left === 0, 'осталось: ' . $left);
+
+$rules = (int) $pdo->query('SELECT COUNT(*) FROM schedule_rules WHERE coach_id = '
+                           . (int) $quit)->fetchColumn();
+check('и правил расписания тоже', $rules === 0, 'осталось: ' . $rules);
+
+$stillHis = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE coach_id = ' . (int) $quit
+                              . ' AND status = "held"')->fetchColumn();
+check('проведённые занятия остались за тем, кто их вёл',
+      $stillHis === $pastHeld, 'было ' . $pastHeld . ', стало ' . $stillHis);
+
+$future = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE coach_id = ' . (int) $quit
+                            . ' AND status = "planned"')->fetchColumn();
+check('будущие занятия перешли новому', $future === 0,
+      'осталось ' . $future . ' из ' . $future0);
+
 echo "\nЗакрытие правила\n";
 
 $before = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE rule_id = ' . (int) $rule2)
@@ -850,7 +1061,7 @@ check('чужую группу в расписании не запросить',
 
 $r = call('POST', '/groups/' . $group1 . '/schedule', array(
     'weekday' => 5, 'time_start' => '17:00', 'kind' => 'ice',
-    'venue_id' => $venue, 'valid_from' => $season), $coachToken);
+    'spot_id' => $spot, 'valid_from' => $season), $coachToken);
 check('тренер расписание не правит', $r['status'] === 403, 'код ' . $r['status']);
 
 echo "\nПосещаемость: лист отметок\n";
@@ -876,7 +1087,7 @@ $twoAgo    = date('Y-m-d', strtotime('-2 days'));
 $tomorrow  = date('Y-m-d', strtotime('+1 day'));
 
 $r = call('POST', '/trainings', array('group_id' => $gm, 'date' => $yesterday,
-    'time_start' => '17:00', 'kind' => 'ice', 'venue_id' => $venue,
+    'time_start' => '17:00', 'kind' => 'ice', 'spot_id' => $spot,
     'coach_id' => $coach), $admin);
 $t1 = $r['body']['id'];
 check('вчерашнее занятие заведено', $r['status'] === 201 && $t1,
@@ -945,7 +1156,7 @@ check('повтор той же отметки причины не требуе�
 echo "\nКогда отмечать нельзя\n";
 
 $r = call('POST', '/trainings', array('group_id' => $gm, 'date' => $tomorrow,
-    'time_start' => '17:00', 'kind' => 'ice', 'venue_id' => $venue), $admin);
+    'time_start' => '17:00', 'kind' => 'ice', 'spot_id' => $spot), $admin);
 $future = $r['body']['id'];
 
 $r = call('GET', '/trainings/' . $future . '/attendance', null, $coachToken);
@@ -972,7 +1183,7 @@ call('PATCH', '/settings', array('coach_edit_window_days' => '1',
                                  'reason' => 'Для проверки'), $admin);
 $old5 = date('Y-m-d', strtotime('-5 days'));
 $r = call('POST', '/trainings', array('group_id' => $gm, 'date' => $old5,
-    'time_start' => '17:00', 'kind' => 'ice', 'venue_id' => $venue), $admin);
+    'time_start' => '17:00', 'kind' => 'ice', 'spot_id' => $spot), $admin);
 $stale = $r['body']['id'];
 
 $r = call('POST', '/trainings/' . $stale . '/attendance', array('marks' => array(
@@ -991,7 +1202,7 @@ call('PATCH', '/settings', array('coach_edit_window_days' => '3',
 echo "\nОтработка пропуска\n";
 
 $r = call('POST', '/trainings', array('group_id' => $gm, 'date' => $twoAgo,
-    'time_start' => '17:00', 'kind' => 'ice', 'venue_id' => $venue), $admin);
+    'time_start' => '17:00', 'kind' => 'ice', 'spot_id' => $spot), $admin);
 $t2 = $r['body']['id'];
 call('POST', '/trainings/' . $t2 . '/attendance', array('marks' => array(
     array('athlete_id' => $kids['Белов'], 'status' => 'absent'),
@@ -1004,7 +1215,7 @@ check('отработка не заводится дважды на одно з�
 
 // Отработка в другой группе — обычный случай
 $r = call('POST', '/trainings', array('group_id' => $group1, 'date' => $yesterday,
-    'time_start' => '19:30', 'kind' => 'ice', 'venue_id' => $venue), $admin);
+    'time_start' => '19:30', 'kind' => 'ice', 'spot_id' => $spot), $admin);
 $other = $r['body']['id'];
 
 $r = call('POST', '/trainings/' . $other . '/makeup', array(
@@ -1020,7 +1231,7 @@ $makeupId = $r['body']['id'];
 // иначе сработает запрет двух отметок на одном и настоящая
 // проверка «пропуск отрабатывается один раз» не проверится
 $r = call('POST', '/trainings', array('group_id' => $group1, 'date' => $yesterday,
-    'time_start' => '20:30', 'kind' => 'gym', 'venue_id' => $venue), $admin);
+    'time_start' => '20:30', 'kind' => 'gym', 'spot_id' => $spot), $admin);
 $other2 = $r['body']['id'];
 
 $r = call('POST', '/trainings/' . $other2 . '/makeup', array(

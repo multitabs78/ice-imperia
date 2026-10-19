@@ -999,9 +999,41 @@ return function (Router $router) {
        Площадки
        ===================================================== */
 
+    /**
+     * Спорткомплексы вместе с их площадками.
+     *
+     * Два уровня, потому что занятие проходит не «в здании»,
+     * а на конкретном льду или в зале с номером.
+     */
     $router->get('/venues', function () {
         Auth::require_login();
-        Response::items(Db::all('SELECT * FROM venues ORDER BY name'));
+
+        $venues = Db::all('SELECT * FROM venues ORDER BY name');
+        $spots  = Db::all('SELECT * FROM spots ORDER BY venue_id, sort, name');
+
+        $byVenue = array();
+        foreach ($spots as $spot) {
+            $byVenue[(int) $spot['venue_id']][] = array(
+                'id'     => (int) $spot['id'],
+                'name'   => $spot['name'],
+                'kind'   => $spot['kind'],
+                'note'   => $spot['note'],
+                'status' => $spot['status'],
+            );
+        }
+
+        $items = array();
+        foreach ($venues as $one) {
+            $id = (int) $one['id'];
+            $items[] = array(
+                'id'      => $id,
+                'name'    => $one['name'],
+                'address' => $one['address'],
+                'status'  => $one['status'],
+                'spots'   => isset($byVenue[$id]) ? $byVenue[$id] : array(),
+            );
+        }
+        Response::items($items);
     });
 
     $router->post('/venues', function (Request $request) {
@@ -1018,6 +1050,87 @@ return function (Router $router) {
         ), 'venue');
 
         Response::ok(Repo::find('venues', $id), 201);
+    });
+
+    $router->patch('/venues/{id}', function (Request $request, $params) {
+        Auth::require_admin();
+        $venue = Repo::find('venues', $params['id'], 'Спорткомплекс');
+
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', 'present', 190)
+            ->text('address', 'Адрес', false, 255)
+            ->one_of('status', 'Состояние', array('active', 'archived'), false)
+            ->done();
+
+        $changes = array();
+        foreach ($data as $key => $value) {
+            if ($value !== null) { $changes[$key] = $value; }
+        }
+        Response::ok(Repo::save('venues', $venue['id'], $changes, 'venue',
+                                $request->input('reason')));
+    });
+
+    $router->post('/venues/{id}/spots', function (Request $request, $params) {
+        Auth::require_admin();
+        $venue = Repo::find('venues', $params['id'], 'Спорткомплекс');
+
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', true, 120)
+            ->one_of('kind', 'Что это', array('ice', 'hall'), true)
+            ->text('note', 'Пояснение', false, 255)
+            ->int('sort', 'Порядок', false, 0, 9999)
+            ->done();
+
+        $twin = Db::value('SELECT id FROM spots WHERE venue_id = ? AND name = ? LIMIT 1',
+                          array($venue['id'], $data['name']));
+        if ($twin) {
+            conflict('spot_exists', 'В этом комплексе уже есть площадка с таким названием');
+        }
+
+        $id = Repo::create('spots', array(
+            'venue_id'   => $venue['id'],
+            'name'       => $data['name'],
+            'kind'       => $data['kind'],
+            'note'       => $data['note'],
+            'sort'       => $data['sort'] === null ? 100 : $data['sort'],
+            'status'     => 'active',
+            'created_at' => Db::now(),
+        ), 'spot');
+
+        Response::ok(Repo::find('spots', $id), 201);
+    });
+
+    $router->patch('/spots/{id}', function (Request $request, $params) {
+        Auth::require_admin();
+        $spot = Repo::find('spots', $params['id'], 'Площадка');
+
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', 'present', 120)
+            ->one_of('kind', 'Что это', array('ice', 'hall'), false)
+            ->text('note', 'Пояснение', false, 255)
+            ->int('sort', 'Порядок', false, 0, 9999)
+            ->one_of('status', 'Состояние', array('active', 'archived'), false)
+            ->done();
+
+        // Площадку, на которой ещё стоят будущие занятия,
+        // в архив не убираем: расписание осталось бы без места
+        if (isset($data['status']) && $data['status'] === 'archived') {
+            $busy = Db::value(
+                'SELECT COUNT(*) FROM trainings
+                  WHERE spot_id = ? AND date >= ? AND status = ?',
+                array($spot['id'], date('Y-m-d'), 'planned'));
+            if ($busy) {
+                conflict('spot_in_use', 'На этой площадке ещё стоят занятия: ' . $busy
+                         . '. Сначала перенесите их или уберите из расписания');
+            }
+        }
+
+        $changes = array();
+        foreach ($data as $key => $value) {
+            if ($value !== null) { $changes[$key] = $value; }
+        }
+        Response::ok(Repo::save('spots', $spot['id'], $changes, 'spot',
+                                $request->input('reason')));
     });
 
     /* =====================================================

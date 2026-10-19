@@ -41,6 +41,8 @@ class Sched
             'kind_name'    => isset(self::$kinds[$row['kind']]) ? self::$kinds[$row['kind']] : $row['kind'],
             'venue_id'     => (int) $row['venue_id'],
             'venue_name'   => isset($row['venue_name']) ? $row['venue_name'] : null,
+            'spot_id'      => empty($row['spot_id']) ? null : (int) $row['spot_id'],
+            'spot_name'    => isset($row['spot_name']) ? $row['spot_name'] : null,
             'coach_id'     => $row['coach_id'] === null ? null : (int) $row['coach_id'],
             'coach_name'   => isset($row['coach_name']) ? $row['coach_name'] : null,
             'valid_from'   => $row['valid_from'],
@@ -65,6 +67,8 @@ class Sched
             'kind_name'    => isset(self::$kinds[$row['kind']]) ? self::$kinds[$row['kind']] : $row['kind'],
             'venue_id'     => (int) $row['venue_id'],
             'venue_name'   => isset($row['venue_name']) ? $row['venue_name'] : null,
+            'spot_id'      => empty($row['spot_id']) ? null : (int) $row['spot_id'],
+            'spot_name'    => isset($row['spot_name']) ? $row['spot_name'] : null,
             'coach_id'     => $row['coach_id'] === null ? null : (int) $row['coach_id'],
             'coach_name'   => isset($row['coach_name']) ? $row['coach_name'] : null,
             'substitute'   => isset($row['substitute']) ? (bool) $row['substitute'] : false,
@@ -81,13 +85,15 @@ class Sched
     public static function query($where, $params, $order = 't.date, t.time_start', $limit = 500)
     {
         return Db::all(
-            'SELECT t.*, g.code AS group_code, g.name AS group_name, v.name AS venue_name,
+            'SELECT t.*, g.code AS group_code, g.name AS group_name,
+                    v.name AS venue_name, sp.name AS spot_name, sp.kind AS spot_kind,
                     c.last_name AS c_last, c.first_name AS c_first, c.middle_name AS c_middle,
                     (SELECT COUNT(*) FROM group_coaches gc
                       WHERE gc.group_id = t.group_id AND gc.coach_id = t.coach_id) AS own_coach
                FROM trainings t
                JOIN training_groups g ON g.id = t.group_id
                JOIN venues v          ON v.id = t.venue_id
+          LEFT JOIN spots sp          ON sp.id = t.spot_id
           LEFT JOIN coaches c         ON c.id = t.coach_id
              WHERE ' . $where . '
              ORDER BY ' . $order . '
@@ -111,6 +117,47 @@ class Sched
         $row['substitute'] = $row['coach_id'] !== null && (int) $row['own_coach'] === 0;
 
         return self::training($row);
+    }
+
+    /** Правило со всеми названиями — как его отдают наружу. */
+    public static function ruleById($id)
+    {
+        $row = Db::row(
+            'SELECT r.*, v.name AS venue_name, sp.name AS spot_name, g.code AS group_code,
+                    c.last_name AS c_last, c.first_name AS c_first, c.middle_name AS c_middle
+               FROM schedule_rules r
+               JOIN venues v          ON v.id = r.venue_id
+          LEFT JOIN spots sp          ON sp.id = r.spot_id
+               JOIN training_groups g ON g.id = r.group_id
+          LEFT JOIN coaches c         ON c.id = r.coach_id
+              WHERE r.id = ?',
+            array((int) $id)
+        );
+        if (!$row) {
+            not_found('Правило расписания не найдено');
+        }
+        $row['coach_name'] = $row['c_last'] ? Repo::fullName(array(
+            'last_name' => $row['c_last'], 'first_name' => $row['c_first'],
+            'middle_name' => $row['c_middle'])) : null;
+
+        return self::rule($row);
+    }
+
+    /**
+     * Площадка по id вместе с комплексом. Комплекс задавать
+     * отдельно не нужно: он однозначно следует из площадки,
+     * и два поля рано или поздно разъехались бы.
+     */
+    public static function spot($spotId)
+    {
+        $row = Db::row('SELECT * FROM spots WHERE id = ?', array((int) $spotId));
+        if (!$row) {
+            not_found('Площадка не найдена');
+        }
+        if ($row['status'] !== 'active') {
+            conflict('spot_archived', 'Эта площадка в архиве');
+        }
+        return $row;
     }
 
     /** Условие видимости тренировок для текущей роли. */
@@ -155,24 +202,34 @@ class Sched
     }
 
     /**
-     * Занято ли место: тот же лёд или тот же тренер в то же
-     * время. Для зала и хореографии лёд не проверяем — в одном
-     * здании это разные помещения.
+     * Занято ли место.
+     *
+     * Площадку несколько групп делят свободно: на одном льду
+     * одновременно работает несколько тренеров, и в зале тоже.
+     * Поэтому занятость считается только по человеку, и только
+     * когда он оказался бы в двух разных местах сразу.
+     * На одной площадке две группы у одного тренера — это
+     * объединённое занятие, а не ошибка.
      *
      * Возвращает текст помехи или null.
      */
-    public static function busy($date, $start, $duration, $kind, $venueId, $coachId, $exceptId = null)
+    public static function busy($date, $start, $duration, $kind, $spotId, $coachId, $exceptId = null)
     {
+        if (!$coachId) {
+            return null;
+        }
+
         $from = strtotime($date . ' ' . $start);
         $to   = $from + $duration * 60;
 
         $rows = Db::all(
-            'SELECT t.id, t.time_start, t.duration_min, t.kind, t.venue_id, t.coach_id,
-                    g.code AS group_code
+            'SELECT t.id, t.time_start, t.duration_min, t.spot_id,
+                    g.code AS group_code, sp.name AS spot_name
                FROM trainings t
                JOIN training_groups g ON g.id = t.group_id
-              WHERE t.date = ? AND t.status IN (?, ?) AND t.id <> ?',
-            array($date, 'planned', 'held', (int) $exceptId)
+          LEFT JOIN spots sp          ON sp.id = t.spot_id
+              WHERE t.date = ? AND t.status IN (?, ?) AND t.id <> ? AND t.coach_id = ?',
+            array($date, 'planned', 'held', (int) $exceptId, (int) $coachId)
         );
 
         foreach ($rows as $row) {
@@ -182,14 +239,12 @@ class Sched
             if ($from >= $otherTo || $to <= $otherFrom) {
                 continue;
             }
+            if ((int) $row['spot_id'] === (int) $spotId) {
+                continue;   // та же площадка — объединённое занятие
+            }
 
-            if ($kind === 'ice' && $row['kind'] === 'ice'
-                && (int) $row['venue_id'] === (int) $venueId) {
-                return 'В это время на льду уже занимается ' . $row['group_code'];
-            }
-            if ($coachId && (int) $row['coach_id'] === (int) $coachId) {
-                return 'Этот тренер в это время уже ведёт ' . $row['group_code'];
-            }
+            return 'Этот тренер в это время уже ведёт ' . $row['group_code']
+                 . ($row['spot_name'] ? ' — ' . $row['spot_name'] : '');
         }
 
         return null;
@@ -208,10 +263,11 @@ return function (Router $router) {
 
         $all  = $request->input('all');
         $rows = Db::all(
-            'SELECT r.*, v.name AS venue_name, g.code AS group_code,
+            'SELECT r.*, v.name AS venue_name, sp.name AS spot_name, g.code AS group_code,
                     c.last_name AS c_last, c.first_name AS c_first, c.middle_name AS c_middle
                FROM schedule_rules r
                JOIN venues v          ON v.id = r.venue_id
+          LEFT JOIN spots sp          ON sp.id = r.spot_id
                JOIN training_groups g ON g.id = r.group_id
           LEFT JOIN coaches c         ON c.id = r.coach_id
               WHERE r.group_id = ?' . ($all ? '' : ' AND (r.valid_to IS NULL OR r.valid_to >= ?)') . '
@@ -238,14 +294,14 @@ return function (Router $router) {
             ->time('time_start', 'Время начала', true)
             ->int('duration_min', 'Длительность', false, 15, 480)
             ->one_of('kind', 'Вид занятия', array('ice', 'gym', 'choreo'), true)
-            ->int('venue_id', 'Площадка', true, 1)
+            ->int('spot_id', 'Площадка', true, 1)
             ->int('coach_id', 'Тренер', false, 1)
             ->int('extra_class_id', 'Дополнительное занятие', false, 1)
             ->date('valid_from', 'Действует с', true)
             ->date('valid_to', 'Действует по', false)
             ->done();
 
-        Repo::find('venues', $data['venue_id'], 'Площадка');
+        $spot = Sched::spot($data['spot_id']);
         if ($data['coach_id']) {
             Repo::find('coaches', $data['coach_id'], 'Тренер');
         }
@@ -272,7 +328,8 @@ return function (Router $router) {
             'duration_min'   => $data['duration_min'] === null ? 60 : $data['duration_min'],
             'kind'           => $data['kind'],
             'extra_class_id' => $data['extra_class_id'],
-            'venue_id'       => $data['venue_id'],
+            'venue_id'       => (int) $spot['venue_id'],
+            'spot_id'        => (int) $spot['id'],
             'coach_id'       => $data['coach_id'],
             'valid_from'     => $data['valid_from'],
             'valid_to'       => $data['valid_to'],
@@ -280,9 +337,22 @@ return function (Router $router) {
             'created_at'     => Db::now(),
         ), 'schedule_rule');
 
-        Response::ok(Sched::rule(Repo::find('schedule_rules', $id)), 201);
+        Response::ok(Sched::ruleById($id), 201);
     });
 
+    /**
+     * Правка правила.
+     *
+     * По умолчанию меняется только шаблон: уже созданные
+     * занятия остаются как были, и прошлое не переписывается.
+     * С `apply_from` изменение переносится и на запланированные
+     * занятия с этой даты — ради того, ради чего правка обычно
+     * и затевается: тренер уволился, пришёл новый, и вносить
+     * расписание заново незачем.
+     *
+     * Проведённые, отменённые и перенесённые не трогаются
+     * никогда: за ними стоят отметки и объяснения.
+     */
     $router->patch('/schedule-rules/{id}', function (Request $request, $params) {
         Auth::require_admin();
         $rule = Repo::find('schedule_rules', $params['id'], 'Правило расписания');
@@ -291,10 +361,15 @@ return function (Router $router) {
             ->int('weekday', 'День недели', false, 1, 7)
             ->time('time_start', 'Время начала', false)
             ->int('duration_min', 'Длительность', false, 15, 480)
-            ->int('venue_id', 'Площадка', false, 1)
+            ->one_of('kind', 'Вид занятия', array('ice', 'gym', 'choreo'), false)
+            ->int('spot_id', 'Площадка', false, 1)
             ->int('coach_id', 'Тренер', false, 1)
             ->date('valid_to', 'Действует по', false)
+            ->date('apply_from', 'Перенести на занятия с', false)
             ->done();
+
+        $applyFrom = $data['apply_from'];
+        unset($data['apply_from']);
 
         $changes = array();
         foreach ($data as $key => $value) {
@@ -302,21 +377,166 @@ return function (Router $router) {
                 $changes[$key] = $value;
             }
         }
+
+        if (isset($changes['spot_id'])) {
+            $spot = Sched::spot($changes['spot_id']);
+            $changes['venue_id'] = (int) $spot['venue_id'];
+        }
+        if (isset($changes['coach_id'])) {
+            $coach = Repo::find('coaches', $changes['coach_id'], 'Тренер');
+            if ($coach['status'] !== 'active') {
+                conflict('coach_archived', 'Этот тренер в архиве');
+            }
+        }
         if (!$changes) {
-            Response::ok(Sched::rule($rule));
+            Response::ok(Sched::ruleById($rule['id']));
         }
         if (isset($changes['valid_to']) && $changes['valid_to'] < $rule['valid_from']) {
             invalid(array('valid_to' => 'Конец срока раньше начала'));
         }
 
+        Db::begin();
+
         Repo::save('schedule_rules', $rule['id'], $changes, 'schedule_rule',
                    $request->input('reason'));
 
-        // Уже созданные тренировки правило задним числом
-        // не трогает. Чтобы новое время попало в расписание,
-        // нужно убрать будущие занятия и сгенерировать заново —
-        // это делает отдельный вызов, осознанно.
-        Response::ok(Sched::rule(Repo::find('schedule_rules', $rule['id'])));
+        $moved   = 0;
+        $clashes = array();
+
+        if ($applyFrom !== null) {
+            // Переносим только то, что имеет смысл переносить:
+            // день недели и срок действия к отдельному занятию
+            // отношения не имеют
+            $carry = array();
+            foreach (array('time_start', 'duration_min', 'kind', 'spot_id', 'venue_id',
+                           'coach_id') as $field) {
+                if (isset($changes[$field])) {
+                    $carry[$field] = $changes[$field];
+                }
+            }
+
+            if ($carry) {
+                $future = Db::all(
+                    'SELECT * FROM trainings
+                      WHERE rule_id = ? AND date >= ? AND status = ?
+                      ORDER BY date',
+                    array($rule['id'], $applyFrom, 'planned')
+                );
+
+                foreach ($future as $one) {
+                    $spotId  = isset($carry['spot_id']) ? $carry['spot_id'] : $one['spot_id'];
+                    $coachId = array_key_exists('coach_id', $carry)
+                               ? $carry['coach_id'] : $one['coach_id'];
+                    $start   = isset($carry['time_start']) ? $carry['time_start'] : $one['time_start'];
+                    $length  = isset($carry['duration_min'])
+                               ? $carry['duration_min'] : $one['duration_min'];
+                    $sort    = isset($carry['kind']) ? $carry['kind'] : $one['kind'];
+
+                    $busy = Sched::busy($one['date'], $start, (int) $length, $sort,
+                                        $spotId, $coachId, $one['id']);
+                    if ($busy) {
+                        $clashes[] = array('date' => $one['date'], 'reason' => $busy);
+                        continue;
+                    }
+
+                    Db::update('trainings', $one['id'], $carry);
+                    $moved++;
+                }
+
+                Audit::write('apply_rule', 'schedule_rule', $rule['id'], null,
+                             array('from' => $applyFrom, 'changed' => $moved,
+                                   'skipped' => count($clashes)),
+                             $request->input('reason'));
+            }
+        }
+
+        Db::commit();
+
+        $out = Sched::ruleById($rule['id']);
+        $out['applied'] = $moved;
+        $out['clashes'] = $clashes;
+        Response::ok($out);
+    });
+
+    /**
+     * Передача групп от одного тренера другому.
+     *
+     * Уволился один, пришёл другой — и это одно действие,
+     * а не обход всех правил и занятий руками. Прошедшие
+     * занятия остаются за тем, кто их провёл: по ним считаются
+     * выплаты.
+     */
+    $router->post('/coaches/{id}/handover', function (Request $request, $params) {
+        Auth::require_admin();
+        $from = Repo::find('coaches', $params['id'], 'Тренер');
+
+        $data = (new Validate($request->body))
+            ->int('to_coach_id', 'Кому передать', true, 1)
+            ->date('from_date', 'С какого числа', false)
+            ->text('reason', 'Основание', true, 255, 3)
+            ->done();
+
+        $to = Repo::find('coaches', $data['to_coach_id'], 'Тренер');
+        if ((int) $to['id'] === (int) $from['id']) {
+            invalid(array('to_coach_id' => 'Это тот же тренер'));
+        }
+        if ($to['status'] !== 'active') {
+            conflict('coach_archived', 'Тренер, которому передаём, в архиве');
+        }
+
+        $since = $data['from_date'] === null ? date('Y-m-d') : $data['from_date'];
+
+        Db::begin();
+
+        // Закрепление за группами
+        $groups = Db::all('SELECT group_id, role FROM group_coaches WHERE coach_id = ?',
+                          array($from['id']));
+        $tookGroups = 0;
+        foreach ($groups as $one) {
+            $has = Db::value('SELECT 1 FROM group_coaches WHERE group_id = ? AND coach_id = ?',
+                             array($one['group_id'], $to['id']));
+            if (!$has) {
+                Db::insert('group_coaches', array(
+                    'group_id' => $one['group_id'],
+                    'coach_id' => $to['id'],
+                    'role'     => $one['role'],
+                ));
+            }
+            Db::run('DELETE FROM group_coaches WHERE group_id = ? AND coach_id = ?',
+                    array($one['group_id'], $from['id']));
+            $tookGroups++;
+        }
+
+        // Постоянное расписание
+        $rules = Db::all('SELECT id FROM schedule_rules WHERE coach_id = ?', array($from['id']));
+        foreach ($rules as $one) {
+            Db::update('schedule_rules', $one['id'], array('coach_id' => $to['id']));
+        }
+
+        // Будущие занятия. Прошедшие не трогаем: их провёл
+        // прежний тренер, и в выплатах они его
+        $future = Db::all(
+            'SELECT id FROM trainings WHERE coach_id = ? AND date >= ? AND status = ?',
+            array($from['id'], $since, 'planned'));
+        foreach ($future as $one) {
+            Db::update('trainings', $one['id'], array('coach_id' => $to['id']));
+        }
+
+        Audit::write('handover', 'coach', $from['id'],
+                     array('coach_id' => (int) $from['id']),
+                     array('to_coach_id' => (int) $to['id'], 'since' => $since,
+                           'groups' => $tookGroups, 'rules' => count($rules),
+                           'trainings' => count($future)),
+                     $data['reason']);
+
+        Db::commit();
+
+        Response::ok(array(
+            'groups'    => $tookGroups,
+            'rules'     => count($rules),
+            'trainings' => count($future),
+            'since'     => $since,
+        ));
     });
 
     /**
@@ -431,7 +651,7 @@ return function (Router $router) {
                     $existed++;
                 } else {
                     $busy = Sched::busy($day, $rule['time_start'], (int) $rule['duration_min'],
-                                        $rule['kind'], $rule['venue_id'], $rule['coach_id']);
+                                        $rule['kind'], $rule['spot_id'], $rule['coach_id']);
                     if ($busy) {
                         // Не прерываем всю генерацию из-за одной
                         // накладки: создаём остальное и показываем,
@@ -451,6 +671,7 @@ return function (Router $router) {
                             'kind'           => $rule['kind'],
                             'extra_class_id' => $rule['extra_class_id'],
                             'venue_id'       => $rule['venue_id'],
+                            'spot_id'        => $rule['spot_id'],
                             'coach_id'       => $rule['coach_id'],
                             'status'         => 'planned',
                             'rule_id'        => $rule['id'],
@@ -568,12 +789,12 @@ return function (Router $router) {
             ->time('time_start', 'Время начала', true)
             ->int('duration_min', 'Длительность', false, 15, 480)
             ->one_of('kind', 'Вид занятия', array('ice', 'gym', 'choreo'), true)
-            ->int('venue_id', 'Площадка', true, 1)
+            ->int('spot_id', 'Площадка', true, 1)
             ->int('coach_id', 'Тренер', false, 1)
             ->done();
 
         Repo::find('training_groups', $data['group_id'], 'Группа');
-        Repo::find('venues', $data['venue_id'], 'Площадка');
+        $spot = Sched::spot($data['spot_id']);
         if ($data['coach_id']) {
             Repo::find('coaches', $data['coach_id'], 'Тренер');
         }
@@ -587,7 +808,7 @@ return function (Router $router) {
         }
 
         $busy = Sched::busy($data['date'], $data['time_start'], $duration,
-                            $data['kind'], $data['venue_id'], $data['coach_id']);
+                            $data['kind'], $spot['id'], $data['coach_id']);
         if ($busy) {
             conflict('slot_busy', $busy);
         }
@@ -598,7 +819,8 @@ return function (Router $router) {
             'time_start'   => $data['time_start'],
             'duration_min' => $duration,
             'kind'         => $data['kind'],
-            'venue_id'     => $data['venue_id'],
+            'venue_id'     => (int) $spot['venue_id'],
+            'spot_id'      => (int) $spot['id'],
             'coach_id'     => $data['coach_id'],
             'status'       => 'planned',
             'created_by'   => Auth::id(),
@@ -651,7 +873,7 @@ return function (Router $router) {
         $data = (new Validate($request->body))
             ->date('date', 'Новая дата', true)
             ->time('time_start', 'Новое время', true)
-            ->int('venue_id', 'Площадка', false, 1)
+            ->int('spot_id', 'Площадка', false, 1)
             ->int('coach_id', 'Тренер', false, 1)
             ->text('reason', 'Причина', true, 255, 3)
             ->done();
@@ -667,7 +889,13 @@ return function (Router $router) {
             invalid(array('date' => 'Это то же самое время'));
         }
 
-        $venueId = $data['venue_id'] === null ? (int) $training['venue_id'] : $data['venue_id'];
+        $spotId  = (int) $training['spot_id'];
+        $venueId = (int) $training['venue_id'];
+        if ($data['spot_id'] !== null) {
+            $spot    = Sched::spot($data['spot_id']);
+            $spotId  = (int) $spot['id'];
+            $venueId = (int) $spot['venue_id'];
+        }
         $coachId = $data['coach_id'] === null
             ? ($training['coach_id'] === null ? null : (int) $training['coach_id'])
             : $data['coach_id'];
@@ -679,7 +907,7 @@ return function (Router $router) {
         }
 
         $busy = Sched::busy($data['date'], $data['time_start'], (int) $training['duration_min'],
-                            $training['kind'], $venueId, $coachId, $training['id']);
+                            $training['kind'], $spotId, $coachId, $training['id']);
         if ($busy) {
             conflict('slot_busy', $busy);
         }
@@ -694,6 +922,7 @@ return function (Router $router) {
             'kind'           => $training['kind'],
             'extra_class_id' => $training['extra_class_id'],
             'venue_id'       => $venueId,
+            'spot_id'        => $spotId,
             'coach_id'       => $coachId,
             'status'         => 'planned',
             'rule_id'        => $training['rule_id'],
@@ -765,7 +994,7 @@ return function (Router $router) {
 
         $busy = Sched::busy($training['date'], $training['time_start'],
                             (int) $training['duration_min'], $training['kind'],
-                            (int) $training['venue_id'], (int) $coach['id'], $training['id']);
+                            (int) $training['spot_id'], (int) $coach['id'], $training['id']);
         if ($busy) {
             conflict('slot_busy', $busy);
         }
