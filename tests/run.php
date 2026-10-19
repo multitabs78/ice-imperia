@@ -73,6 +73,14 @@ function call($method, $path, $body = null, $token = null, $ip = null)
 {
     global $base;
 
+    // Кириллица в строке запроса должна уходить закодированной,
+    // иначе сервер получит не то, что мы думаем
+    if (strpos($path, '?') !== false) {
+        list($route, $query) = explode('?', $path, 2);
+        parse_str($query, $parsed);
+        $path = $route . '?' . http_build_query($parsed);
+    }
+
     $ch = curl_init($base . $path);
     $headers = array('Accept: application/json');
 
@@ -335,6 +343,216 @@ check('ни пароль, ни код входа в журнал не попал
 $codes = (int) $pdo->query("SELECT COUNT(*) FROM auth_codes WHERE code_hash LIKE '%123456%'")
                    ->fetchColumn();
 check('коды в базе только хешем', $codes === 0);
+
+/* --- Справочники ----------------------------------------- */
+
+echo "\nСправочники: спортсмены\n";
+
+$r = call('POST', '/auth/login', array('login' => 'admin@example.test', 'password' => 'newpassword123'));
+$admin = $r['body']['token'];
+
+$r = call('POST', '/athletes', array(
+    'last_name' => 'Петров', 'first_name' => 'Илья', 'birth_date' => '2017-03-14'), $admin);
+$newAthlete = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('спортсмен создан', $r['status'] === 201 && $newAthlete, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('возраст посчитан', isset($r['body']['age']) && $r['body']['age'] >= 8,
+      'возраст: ' . (isset($r['body']['age']) ? $r['body']['age'] : '—'));
+
+$r = call('POST', '/athletes', array('last_name' => '', 'first_name' => 'Илья'), $admin);
+check('без фамилии — 422', $r['status'] === 422 && isset($r['body']['fields']['last_name']));
+
+$r = call('POST', '/athletes', array(
+    'last_name' => 'Иванов', 'first_name' => 'Тест', 'birth_date' => '2099-01-01'), $admin);
+check('дата рождения в будущем не принимается', $r['status'] === 422,
+      'код ' . $r['status']);
+
+$r = call('GET', '/athletes?q=Петров', null, $admin);
+check('поиск по фамилии находит', $r['status'] === 200 && $r['body']['total'] >= 1,
+      'найдено: ' . (isset($r['body']['total']) ? $r['body']['total'] : '—'));
+
+$r = call('POST', '/athletes', array('last_name' => 'Сидоров', 'first_name' => 'Иван'));
+check('без токена создать нельзя', $r['status'] === 401, 'код ' . $r['status']);
+
+echo "\nСправочники: группы и тренеры\n";
+
+$r = call('POST', '/groups', array('code' => 'СОГ-1', 'name' => 'Спортивно-оздоровительная'), $admin);
+$group1 = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('группа создана', $r['status'] === 201 && $group1, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/groups', array('code' => 'СОГ-1', 'name' => 'Дубль'), $admin);
+check('повтор короткого названия — 409', $r['status'] === 409
+      && $r['body']['error'] === 'code_taken', 'код ' . $r['status']);
+
+$r = call('POST', '/groups', array('code' => 'СОГ-2', 'name' => 'Вторая', 'age_from' => 9, 'age_to' => 5), $admin);
+check('возраст наоборот не принимается', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('POST', '/groups', array('code' => 'НП-1', 'name' => 'Начальная подготовка'), $admin);
+$group2 = $r['body']['id'];
+
+$r = call('POST', '/coaches', array(
+    'last_name' => 'Филь', 'first_name' => 'Всеволод',
+    'email' => 'coach@example.test', 'password' => 'coachpass123'), $admin);
+$coach = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('тренер создан с учётной записью', $r['status'] === 201 && !empty($r['body']['has_login']),
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/groups/' . $group1 . '/coaches', array('coach_id' => $coach), $admin);
+check('тренер закреплён за группой', $r['status'] === 200 && count($r['body']['items']) === 1,
+      $r['raw']);
+
+echo "\nПеревод между группами\n";
+
+$r = call('POST', '/enrollments', array(
+    'athlete_id' => $newAthlete, 'group_id' => $group1, 'date_from' => '2026-09-01'), $admin);
+check('назначение в группу', $r['status'] === 201, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/enrollments', array(
+    'athlete_id' => $newAthlete, 'group_id' => $group1, 'date_from' => '2026-10-01'), $admin);
+check('повторное назначение в ту же группу — 409', $r['status'] === 409, 'код ' . $r['status']);
+
+$r = call('POST', '/enrollments', array(
+    'athlete_id' => $newAthlete, 'group_id' => $group2, 'date_from' => '2026-10-01'), $admin);
+check('перевод закрыл прошлое назначение', $r['status'] === 201 && $r['body']['closed'] === 1,
+      'закрыто: ' . (isset($r['body']['closed']) ? $r['body']['closed'] : '—'));
+
+$groups = $r['body']['groups'];
+$closed = null;
+foreach ($groups as $g) { if ((int) $g['group_id'] === (int) $group1) { $closed = $g; } }
+check('история прошлой группы сохранилась', $closed && $closed['date_to'] === '2026-09-30',
+      $closed ? 'дата окончания ' . $closed['date_to'] : 'записи нет');
+
+echo "\nТренер видит только своих\n";
+
+$r = call('POST', '/auth/login', array('login' => 'coach@example.test', 'password' => 'coachpass123'));
+$coachToken = isset($r['body']['token']) ? $r['body']['token'] : null;
+check('тренер вошёл', $r['status'] === 200 && $coachToken, 'код ' . $r['status']);
+check('тренеру предписано сменить пароль', !empty($r['body']['user']['must_change_password']));
+
+$r = call('GET', '/groups', null, $coachToken);
+check('в списке групп только своя', $r['status'] === 200 && count($r['body']['items']) === 1,
+      'групп: ' . (isset($r['body']['items']) ? count($r['body']['items']) : '—'));
+
+$r = call('GET', '/groups/' . $group2, null, $coachToken);
+check('чужая группа — 403', $r['status'] === 403, 'код ' . $r['status']);
+
+$r = call('GET', '/athletes/' . $newAthlete, null, $coachToken);
+check('спортсмен чужой группы тренеру не виден', $r['status'] === 403, 'код ' . $r['status']);
+
+$r = call('POST', '/athletes', array('last_name' => 'Чужой', 'first_name' => 'Ребёнок'), $coachToken);
+check('тренер не создаёт спортсменов', $r['status'] === 403, 'код ' . $r['status']);
+
+$r = call('POST', '/enrollments', array(
+    'athlete_id' => $newAthlete, 'group_id' => $group1, 'date_from' => '2026-11-01'), $admin);
+$r = call('GET', '/athletes', null, $coachToken);
+check('после возврата в группу спортсмен виден тренеру',
+      $r['status'] === 200 && $r['body']['total'] >= 1,
+      'видит: ' . (isset($r['body']['total']) ? $r['body']['total'] : '—'));
+
+echo "\nРодитель и ребёнок\n";
+
+$r = call('POST', '/parents', array(
+    'last_name' => 'Петрова', 'first_name' => 'Ольга', 'email' => 'olga@example.test'), $admin);
+$newParent = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('родитель создан', $r['status'] === 201 && $newParent, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/parents', array(
+    'last_name' => 'Двойник', 'first_name' => 'Ольга', 'email' => 'olga@example.test'), $admin);
+check('повтор почты — 409', $r['status'] === 409 && $r['body']['error'] === 'contact_taken',
+      'код ' . $r['status']);
+
+$r = call('POST', '/parents', array('last_name' => 'Безсвязи', 'first_name' => 'Пётр'), $admin);
+check('родитель без телефона и почты не создаётся', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('POST', '/athletes/' . $newAthlete . '/parents',
+          array('parent_user_id' => $newParent, 'relation' => 'mother', 'is_primary' => true), $admin);
+check('родитель привязан к ребёнку', $r['status'] === 200 && count($r['body']['items']) === 1,
+      $r['raw']);
+
+$r = call('POST', '/athletes/' . $newAthlete . '/parents',
+          array('parent_user_id' => $newParent, 'relation' => 'mother'), $admin);
+check('повторная привязка — 409', $r['status'] === 409, 'код ' . $r['status']);
+
+echo "\nТарифы\n";
+
+$r = call('POST', '/tariffs', array('name' => 'СОГ-1', 'price' => 14400, 'sessions_count' => 8), $admin);
+$tariff = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('тариф создан', $r['status'] === 201 && $tariff, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('GET', '/tariffs', null, $admin);
+$found = null;
+foreach ($r['body']['items'] as $t) { if ((int) $t['id'] === (int) $tariff) { $found = $t; } }
+check('цена занятия выведена из тарифа', $found && $found['lesson_price'] === '1800.00',
+      $found ? 'вышло ' . $found['lesson_price'] : 'тариф не найден');
+
+// Абонемент, чтобы тариф стал использованным
+$pdo->prepare('INSERT INTO subscriptions (athlete_id, group_id, tariff_id, period, sessions_total,
+               lesson_price, price_base, price, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    ->execute(array($newAthlete, $group1, $tariff, '2026-11', 8, 1800, 14400, 14400, 'active',
+                    date('Y-m-d H:i:s')));
+
+$r = call('PATCH', '/tariffs/' . $tariff, array('price' => 15000), $admin);
+check('цену использованного тарифа менять нельзя', $r['status'] === 409
+      && $r['body']['error'] === 'tariff_in_use', 'код ' . $r['status']);
+
+$r = call('PATCH', '/tariffs/' . $tariff, array('name' => 'СОГ-1, 2 раза в неделю'), $admin);
+check('название менять можно', $r['status'] === 200, 'код ' . $r['status']);
+
+$r = call('POST', '/tariffs/' . $tariff . '/revise',
+          array('price' => 15000, 'reason' => 'Цены с января'), $admin);
+$tariff2 = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('новая версия тарифа создана', $r['status'] === 201 && $tariff2 && $tariff2 != $tariff,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$old = $pdo->query('SELECT status FROM tariffs WHERE id = ' . (int) $tariff)->fetchColumn();
+check('прежняя версия ушла в архив', $old === 'archived', 'состояние: ' . $old);
+
+$sub = $pdo->query('SELECT price FROM subscriptions WHERE tariff_id = ' . (int) $tariff)->fetchColumn();
+check('выданный абонемент не пересчитался', (float) $sub === 14400.0, 'в абонементе ' . $sub);
+
+echo "\nНастройки\n";
+
+$r = call('GET', '/settings', null, $admin);
+check('настройки читаются', $r['status'] === 200 && count($r['body']['items']) >= 5,
+      'записей: ' . (isset($r['body']['items']) ? count($r['body']['items']) : '—'));
+
+$r = call('PATCH', '/settings', array('single_lesson_price' => '2600', 'reason' => 'Цены с января'), $admin);
+check('настройка сохранена', $r['status'] === 200 && in_array('single_lesson_price', $r['body']['saved']),
+      $r['raw']);
+
+$value = $pdo->query("SELECT value FROM settings WHERE name = 'single_lesson_price'")->fetchColumn();
+check('значение действительно изменилось', $value === '2600', 'в базе ' . $value);
+
+$r = call('PATCH', '/settings', array('single_lesson_price' => ''), $admin);
+check('пустое значение не сохраняется', $r['status'] === 422, 'код ' . $r['status']);
+
+echo "\nУдаление персональных данных\n";
+
+$r = call('POST', '/athletes/' . $newAthlete . '/anonymize', array(), $admin);
+check('без основания не удаляем', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('POST', '/athletes/' . $newAthlete . '/anonymize',
+          array('reason' => 'Заявление родителя от 19.10'), $admin);
+check('профиль обезличен', $r['status'] === 200, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$row = $pdo->query('SELECT last_name, birth_date, status FROM athletes WHERE id = ' . (int) $newAthlete)
+           ->fetch();
+check('имя и дата рождения стёрты',
+      $row['last_name'] === 'Удалённый' && $row['birth_date'] === null && $row['status'] === 'archived',
+      json_encode($row, JSON_UNESCAPED_UNICODE));
+
+$kept = (int) $pdo->query('SELECT COUNT(*) FROM subscriptions WHERE athlete_id = ' . (int) $newAthlete)
+                  ->fetchColumn();
+check('история абонементов осталась', $kept === 1, 'записей: ' . $kept);
+
+echo "\nЖурнал справочников\n";
+
+$kinds = $pdo->query("SELECT DISTINCT entity FROM audit_log")->fetchAll(PDO::FETCH_COLUMN);
+check('в журнале есть записи по справочникам',
+      in_array('athlete', $kinds) && in_array('group', $kinds) && in_array('tariff', $kinds),
+      implode(', ', $kinds));
+
+$why = $pdo->query("SELECT reason FROM audit_log WHERE action = 'anonymize' LIMIT 1")->fetchColumn();
+check('основание удаления записано', $why === 'Заявление родителя от 19.10', 'причина: ' . $why);
 
 /* --- Итог ------------------------------------------------ */
 

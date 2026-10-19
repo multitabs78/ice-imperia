@@ -18,6 +18,7 @@ require_once $root . '/api/core/App.php';
 require_once $root . '/api/core/Db.php';
 require_once $root . '/api/core/Router.php';
 require_once $root . '/api/core/Validate.php';
+require_once $root . '/api/core/Repo.php';
 require_once $root . '/api/core/Auth.php';
 require_once $root . '/api/core/Audit.php';
 require_once $root . '/api/core/Notify.php';
