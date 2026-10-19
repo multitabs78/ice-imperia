@@ -22,6 +22,24 @@ class Validate
         return array_key_exists($field, $this->data) ? $this->data[$field] : null;
     }
 
+    /**
+     * Обязательно ли поле.
+     *
+     * Кроме true и false есть третий случай — 'present': поле
+     * можно не присылать, но если прислали, пустым оно быть
+     * не может. Это про правку: отсутствие поля значит
+     * «не меняем», а пустая строка значит «сотри», и стирать
+     * фамилию нельзя. Без этого различия форма правки молча
+     * не делает ничего, и человек думает, что сохранил.
+     */
+    private function needed($field, $required)
+    {
+        if ($required === 'present') {
+            return array_key_exists($field, $this->data);
+        }
+        return (bool) $required;
+    }
+
     private function fail($field, $message)
     {
         if (!isset($this->errors[$field])) {
@@ -36,7 +54,7 @@ class Validate
         $value = is_string($value) ? trim(preg_replace('/\s+/u', ' ', $value)) : '';
 
         if ($value === '') {
-            if ($required) {
+            if ($this->needed($field, $required)) {
                 $this->fail($field, $label . ': заполните поле');
             }
             $this->clean[$field] = null;
@@ -58,7 +76,7 @@ class Validate
         $value = $this->raw($field);
 
         if ($value === null || $value === '') {
-            if ($required) {
+            if ($this->needed($field, $required)) {
                 $this->fail($field, $label . ': заполните поле');
             }
             $this->clean[$field] = null;
@@ -89,7 +107,7 @@ class Validate
         $digits = preg_replace('/\D+/', '', $value);
 
         if ($digits === '') {
-            if ($required) {
+            if ($this->needed($field, $required)) {
                 $this->fail($field, $label . ': заполните поле');
             }
             $this->clean[$field] = null;
@@ -111,7 +129,7 @@ class Validate
         $value = trim((string) $this->raw($field));
 
         if ($value === '') {
-            if ($required) {
+            if ($this->needed($field, $required)) {
                 $this->fail($field, $label . ': заполните поле');
             }
             $this->clean[$field] = null;
@@ -130,7 +148,7 @@ class Validate
         $value = trim((string) $this->raw($field));
 
         if ($value === '') {
-            if ($required) {
+            if ($this->needed($field, $required)) {
                 $this->fail($field, $label . ': заполните поле');
             }
             $this->clean[$field] = null;
@@ -173,7 +191,7 @@ class Validate
         $value = $this->raw($field);
 
         if ($value === null || $value === '') {
-            if ($required) {
+            if ($this->needed($field, $required)) {
                 $this->fail($field, $label . ': выберите значение');
             }
             $this->clean[$field] = null;

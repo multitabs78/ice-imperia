@@ -305,8 +305,8 @@ return function (Router $router) {
         $athlete = Repo::find('athletes', $params['id'], 'Спортсмен');
 
         $data = (new Validate($request->body))
-            ->text('last_name', 'Фамилия', false, 80)
-            ->text('first_name', 'Имя', false, 80)
+            ->text('last_name', 'Фамилия', 'present', 80)
+            ->text('first_name', 'Имя', 'present', 80)
             ->text('middle_name', 'Отчество', false, 80)
             ->date('birth_date', 'Дата рождения', false, true)
             ->one_of('gender', 'Пол', array('f', 'm'), false)
@@ -491,8 +491,8 @@ return function (Router $router) {
         $parent = Repo::find('users', $params['id'], 'Родитель');
 
         $data = (new Validate($request->body))
-            ->text('last_name', 'Фамилия', false, 80)
-            ->text('first_name', 'Имя', false, 80)
+            ->text('last_name', 'Фамилия', 'present', 80)
+            ->text('first_name', 'Имя', 'present', 80)
             ->text('middle_name', 'Отчество', false, 80)
             ->phone('phone', 'Телефон', false)
             ->email('email', 'Почта', false)
@@ -599,8 +599,8 @@ return function (Router $router) {
         $coach = Repo::find('coaches', $params['id'], 'Тренер');
 
         $data = (new Validate($request->body))
-            ->text('last_name', 'Фамилия', false, 80)
-            ->text('first_name', 'Имя', false, 80)
+            ->text('last_name', 'Фамилия', 'present', 80)
+            ->text('first_name', 'Имя', 'present', 80)
             ->text('middle_name', 'Отчество', false, 80)
             ->one_of('status', 'Состояние', array('active', 'archived'), false)
             ->done();
@@ -697,8 +697,8 @@ return function (Router $router) {
         $group = Repo::find('training_groups', $params['id'], 'Группа');
 
         $data = (new Validate($request->body))
-            ->text('code', 'Короткое название', false, 32)
-            ->text('name', 'Полное название', false, 190)
+            ->text('code', 'Короткое название', 'present', 32)
+            ->text('name', 'Полное название', 'present', 190)
             ->int('age_from', 'Возраст с', false, 2, 99)
             ->int('age_to', 'Возраст до', false, 2, 99)
             ->int('tariff_id', 'Тариф', false, 1)
@@ -951,7 +951,7 @@ return function (Router $router) {
         $tariff = Repo::find('tariffs', $params['id'], 'Тариф');
 
         $data = (new Validate($request->body))
-            ->text('name', 'Название', false, 190)
+            ->text('name', 'Название', 'present', 190)
             ->int('price', 'Цена', false, 0, 1000000)
             ->int('sessions_count', 'Занятий в месяц', false, 1, 200)
             ->int('days_per_week', 'Занятий в неделю', false, 1, 7)

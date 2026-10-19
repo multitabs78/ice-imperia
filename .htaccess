@@ -33,6 +33,9 @@ DirectoryIndex index.php index.html
   # Вход в личный кабинет. Короткий адрес /login без расширения:
   # его диктуют вслух и пишут в сообщениях родителям.
   RewriteRule ^login/?$ cabinet/login.html [L]
+
+  # Кабинет: /cabinet без косой черты тоже открывается
+  RewriteRule ^cabinet/?$ cabinet/index.html [L]
 </IfModule>
 
 # Кодировка по умолчанию

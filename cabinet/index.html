@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0F1C24">
+<title>Личный кабинет — Империя льда</title>
+
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preload" href="/assets/fonts/golos-text-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/cabinet/cabinet.css?v=20261019">
+<link rel="stylesheet" href="/cabinet/app.css?v=20261019">
+</head>
+<body class="app">
+
+<header class="top">
+  <div class="top__bar">
+    <a class="top__brand" href="/">
+      <img src="/assets/logo.png" alt="" width="560" height="532" aria-hidden="true">
+      <span>
+        <b>Империя льда</b>
+        <span>Личный кабинет</span>
+      </span>
+    </a>
+    <div class="top__who">
+      <span class="top__name" id="who"></span>
+      <button class="top__out" type="button" id="out">Выйти</button>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs" aria-label="Разделы кабинета">
+    <div class="tabs__row" id="tabs-row"></div>
+  </nav>
+</header>
+
+<main class="page" id="page">
+  <p class="loading">Загружаем…</p>
+</main>
+
+<dialog class="sheet" id="sheet">
+  <form method="dialog" class="sheet__in" id="sheet-form"></form>
+</dialog>
+
+<script src="/cabinet/app.js?v=20261019"></script>
+</body>
+</html>

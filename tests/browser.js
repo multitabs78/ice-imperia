@@ -93,25 +93,38 @@ function check(name, condition, details = '') {
   // Верный код кладёт в базу тестовый сервер по адресу /__test/code
   const code = await (await fetch(BASE + '/__test/code?login=parent@example.test')).text();
   await page.fill('#code', code.trim());
-  await page.waitForSelector('#step-done:not([hidden])', { timeout: 8000 });
-  check('верный код — вошли', await page.isVisible('#step-done'));
-  check('показано имя', (await page.textContent('#done-who')).includes('Иванова'),
-        await page.textContent('#done-who'));
-  check('показаны дети', (await page.textContent('#done-next')).includes('Иванов'));
+  await page.waitForURL('**/cabinet/**', { timeout: 8000 });
+  check('верный код — вошли и попали в кабинет', page.url().includes('/cabinet'), page.url());
+
+  // На телефоне имя в шапке скрыто намеренно — ждём не видимости,
+  // а того, что скрипт его подставил
+  await page.waitForFunction(
+    () => { var n = document.getElementById('who'); return n && n.textContent.length > 0; },
+    null, { timeout: 8000 });
+  await page.waitForTimeout(700);
+  check('имя вошедшего в шапке кабинета',
+        (await page.textContent('#who')).includes('Иванова'), await page.textContent('#who'));
+  check('родителю честно сказано, что его разделов пока нет',
+        (await page.textContent('#page')).includes('родителей'),
+        await page.textContent('#page'));
   await page.screenshot({ path: OUT + '/login-done.png', fullPage: true });
 
   console.log('\nСессия');
   await page.reload({ waitUntil: 'load' });
-  await page.waitForTimeout(600);
-  check('после перезагрузки вход помнится', await page.isVisible('#step-done'));
-  await page.click('#btn-logout');
-  await page.waitForSelector('#step-login:not([hidden])', { timeout: 8000 });
-  check('выход возвращает к форме', await page.isVisible('#step-login'));
-  await page.reload({ waitUntil: 'load' });
-  await page.waitForTimeout(600);
-  check('после выхода вход не помнится', await page.isVisible('#step-login'));
+  await page.waitForTimeout(800);
+  check('после перезагрузки вход помнится', page.url().includes('/cabinet'), page.url());
+
+  await page.click('#out');
+  await page.waitForURL('**/login', { timeout: 8000 });
+  check('выход возвращает к форме входа', await page.isVisible('#step-login'));
+
+  await page.goto(BASE + '/cabinet/', { waitUntil: 'load' });
+  await page.waitForURL('**/login', { timeout: 8000 }).catch(() => {});
+  check('после выхода кабинет не открывается', page.url().includes('/login'), page.url());
 
   console.log('\nВход по паролю');
+  await page.goto(BASE + '/login', { waitUntil: 'load' });
+  await page.waitForSelector('#step-login:not([hidden])', { timeout: 8000 });
   await page.click('[data-go="step-password"]');
   check('открылась форма пароля', await page.isVisible('#step-password'));
   await page.fill('#login2', 'admin@example.test');
@@ -123,9 +136,12 @@ function check(name, condition, details = '') {
 
   await page.fill('#password', 'verysecret123');
   await page.click('#btn-login');
-  await page.waitForSelector('#step-done:not([hidden])', { timeout: 8000 });
-  check('верный пароль — вошли', await page.isVisible('#step-done'));
-  check('роль показана', (await page.textContent('#done-next')).includes('Администратор'));
+  await page.waitForURL('**/cabinet/**', { timeout: 8000 });
+  await page.waitForSelector('.tab', { timeout: 8000 });
+  check('верный пароль — вошли', page.url().includes('/cabinet'), page.url());
+  check('администратору открылись разделы',
+        (await page.locator('.tab').count()) === 6,
+        'разделов: ' + (await page.locator('.tab').count()));
 
   console.log('\nОшибки в консоли');
   check('консоль чистая', problems.length === 0, problems.join(' | '));
