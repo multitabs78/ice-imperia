@@ -709,10 +709,15 @@
       var athletes = (results[1].data.items || []);
       var box = clear(page);
 
+      var groupActs = [el('a', { class: 'btn btn--ghost btn--small',
+        href: '#/journal/' + g.id }, 'Журнал посещений')];
+      if (can(['admin'])) {
+        groupActs.push(el('button', { class: 'btn btn--ghost btn--small',
+          onclick: function () { editGroup(g); } }, 'Изменить'));
+      }
+
       box.appendChild(backLink('groups', 'Группы'));
-      box.appendChild(heading(g.code + ' · ' + g.name, null,
-        can(['admin']) ? [el('button', { class: 'btn btn--ghost btn--small',
-          onclick: function () { editGroup(g); } }, 'Изменить')] : []));
+      box.appendChild(heading(g.code + ' · ' + g.name, null, groupActs));
 
       var facts = el('dl', { class: 'facts' }, [
         el('dt', null, 'Возраст'),
@@ -1282,6 +1287,7 @@
 
   function trainingCard(t) {
     var card = el('div', { class: 'tr tr--' + t.status });
+    t.future = t.date > isoDate(new Date());
 
     // Время и группа в одну строку: в узкой колонке дня
     // каждая лишняя строка заметна
@@ -1310,6 +1316,18 @@
 
     if (t.cancel_reason) {
       card.appendChild(el('div', { class: 'tr__why', text: t.cancel_reason }));
+    }
+
+    // Прошедшее занятие — прежде всего повод его отметить
+    if (t.status === 'planned' && !t.future) {
+      card.appendChild(el('div', { class: 'tr__act' }, [
+        el('a', { class: 'linkish linkish--strong', href: '#/training/' + t.id }, 'Отметить')
+      ]));
+    }
+    if (t.status === 'held') {
+      card.appendChild(el('div', { class: 'tr__act' }, [
+        el('a', { class: 'linkish', href: '#/training/' + t.id }, 'Открыть отметки')
+      ]));
     }
 
     if (t.status === 'planned') {
@@ -1561,6 +1579,348 @@
   }
 
   /* =====================================================
+     Отметки на занятии
+     ===================================================== */
+
+  var MARKS = [
+    { value: 'present',     short: 'был',     title: 'был на занятии' },
+    { value: 'absent',      short: 'нет',     title: 'пропуск' },
+    { value: 'absent_sick', short: 'болеет',  title: 'пропуск по болезни' }
+  ];
+
+  function screenTraining(id) {
+    drawTabs('schedule');
+    loading();
+
+    Promise.all([
+      api('GET', '/trainings/' + id),
+      api('GET', '/trainings/' + id + '/attendance')
+    ]).then(function (results) {
+      if (!results[0].ok) { return fail(results[0]); }
+      if (!results[1].ok) { return fail(results[1]); }
+
+      var t = results[0].data;
+      var sheet = results[1].data;
+      var box = clear(page);
+
+      box.appendChild(backLink('schedule/' + t.date, 'Расписание'));
+      box.appendChild(heading(t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start,
+        [t.kind_name, t.venue_name, t.coach_name].filter(Boolean).join(' · '), []));
+
+      if (!sheet.can_mark) {
+        box.appendChild(el('p', { class: 'alert alert--calm', text: sheet.closed_why }));
+      }
+
+      if (!sheet.items.length) {
+        box.appendChild(board([el('p', { class: 'empty', text:
+          'В этот день в группе никто не занимался' })]));
+        return;
+      }
+
+      // Текущее состояние листа держим здесь: отмечают
+      // быстро и подряд, запрос на каждое нажатие — это
+      // потерянные отметки там, где связь плохая
+      var chosen = {};
+      sheet.items.forEach(function (one) {
+        chosen[one.athlete_id] = one.mark ? one.mark.status : null;
+      });
+
+      var rows = el('div', { class: 'sheet-list' });
+
+      sheet.items.forEach(function (one) {
+        var row = el('div', { class: 'mk' });
+
+        row.appendChild(el('div', { class: 'mk__who' }, [
+          el('a', { class: 'linkish', href: '#/athletes/' + one.athlete_id }, one.name),
+          one.makeup ? el('span', { class: 'line__sub' }, 'отработка, занятие не списывается') : null
+        ]));
+
+        var group = el('div', { class: 'mk__pick', role: 'group',
+                                'aria-label': 'Отметка: ' + one.name });
+
+        MARKS.forEach(function (m) {
+          var btn = el('button', {
+            type: 'button',
+            class: 'pick' + (chosen[one.athlete_id] === m.value ? ' is-on' : ''),
+            'data-mark': m.value,
+            'data-athlete': one.athlete_id,
+            title: m.title,
+            'aria-pressed': chosen[one.athlete_id] === m.value ? 'true' : 'false'
+          }, m.short);
+
+          btn.addEventListener('click', function () {
+            if (!sheet.can_mark) { return; }
+            chosen[one.athlete_id] = m.value;
+            [].forEach.call(group.querySelectorAll('.pick'), function (other) {
+              var on = other.getAttribute('data-mark') === m.value;
+              other.classList.toggle('is-on', on);
+              other.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
+            refreshCount();
+          });
+
+          group.appendChild(btn);
+        });
+
+        row.appendChild(group);
+        rows.appendChild(row);
+      });
+
+      // Счётчик над списком: внизу его закрыла бы
+      // закреплённая панель действий
+      var counter = el('p', { class: 'field__note' });
+      box.appendChild(counter);
+      box.appendChild(board([rows]));
+
+      function refreshCount() {
+        var left = 0;
+        Object.keys(chosen).forEach(function (k) { if (!chosen[k]) { left++; } });
+        counter.textContent = left
+          ? 'Без отметки: ' + left + ' ' + plural(left, 'человек', 'человека', 'человек')
+          : 'Отмечены все';
+      }
+      refreshCount();
+
+      if (!sheet.can_mark) { return; }
+
+      var bar = el('div', { class: 'markbar' }, [
+        el('button', { class: 'btn btn--ghost btn--small', onclick: function () {
+          // Чаще всего пришли почти все: быстрее отметить
+          // всех и снять нескольких, чем тыкать каждого
+          sheet.items.forEach(function (one) { chosen[one.athlete_id] = 'present'; });
+          [].forEach.call(rows.querySelectorAll('.pick'), function (btn) {
+            var on = btn.getAttribute('data-mark') === 'present';
+            btn.classList.toggle('is-on', on);
+            btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+          });
+          refreshCount();
+        } }, 'Все были'),
+        el('button', { class: 'btn btn--ghost btn--small',
+          onclick: function () { addMakeup(t); } }, 'Добавить отработку'),
+        el('button', { class: 'btn btn--primary btn--small',
+          onclick: function () { saveMarks(t, sheet, chosen); } }, 'Сохранить')
+      ]);
+      box.appendChild(bar);
+    });
+  }
+
+  function saveMarks(t, sheet, chosen) {
+    var marks = [];
+    var changed = false;
+
+    sheet.items.forEach(function (one) {
+      var was = one.mark ? one.mark.status : null;
+      var now = chosen[one.athlete_id];
+      if (!now) { return; }
+      marks.push({ athlete_id: one.athlete_id, status: now });
+      if (was !== null && was !== now) { changed = true; }
+    });
+
+    if (!marks.length) {
+      toast('Никто не отмечен', true);
+      return;
+    }
+
+    function send(reason) {
+      var body = { marks: marks };
+      if (reason) { body.reason = reason; }
+      return api('POST', '/trainings/' + t.id + '/attendance', body).then(function (answer) {
+        if (!answer.ok) { return answer; }
+        toast('Отметки сохранены');
+        screenTraining(t.id);
+      });
+    }
+
+    // Причину спрашиваем только когда правим уже сохранённое:
+    // при первой отметке вопрос был бы лишней помехой
+    if (!changed) {
+      send(null).then(function (answer) {
+        if (answer && answer.ok === false) { toast(reason(answer), true); }
+      });
+      return;
+    }
+
+    confirmWithReason({
+      title: 'Изменить отметки',
+      note: 'Отметки за это занятие уже сохранялись. Изменение попадёт в журнал '
+          + 'вместе с причиной.',
+      submit: 'Сохранить',
+      onConfirm: send
+    });
+  }
+
+  /**
+   * Отработка в два шага: сначала кто, потом какой именно
+   * пропуск закрывается. Спрашивать номера записей, как
+   * было бы в один шаг, — значит заставлять тренера лазить
+   * по адресной строке.
+   */
+  function addMakeup(t) {
+    api('GET', '/athletes?limit=200').then(function (answer) {
+      var people = (answer.data.items || []).map(function (a) {
+        return { value: a.id, label: a.name };
+      });
+      if (!people.length) {
+        toast('Спортсменов пока нет', true);
+        return;
+      }
+
+      openSheet({
+        title: 'Отработка: кто',
+        note: 'Спортсмен закрывает свой пропуск. Занятие ему не списывается — '
+            + 'пропуск уже списан раньше.',
+        submit: 'Дальше',
+        fields: [{ name: 'athlete_id', label: 'Спортсмен', type: 'select', options: people }],
+        onSubmit: function (values) {
+          return pickMiss(t, values.athlete_id);
+        }
+      });
+    });
+  }
+
+  function pickMiss(t, athleteId) {
+    var since = shiftDays(t.date, -60);
+
+    return api('GET', '/athletes/' + athleteId + '/attendance?from=' + since
+               + '&to=' + t.date).then(function (answer) {
+      if (!answer.ok) { return answer; }
+
+      var misses = (answer.data.items || []).filter(function (m) {
+        return m.status === 'absent' || m.status === 'absent_sick';
+      }).map(function (m) {
+        return { value: m.training_id,
+                 label: dayTitle(m.date) + ', ' + m.time_start + ' · ' + m.group_code };
+      });
+
+      if (!misses.length) {
+        return { ok: false, data: { message:
+          'За последние два месяца у этого спортсмена нет отмеченных пропусков' } };
+      }
+
+      // Окно закроется само, второе откроем следом
+      setTimeout(function () {
+        openSheet({
+          title: 'Отработка: какой пропуск',
+          note: 'Выбранное занятие будет считаться закрытым, и это не спишет ещё одно.',
+          submit: 'Добавить',
+          fields: [
+            { name: 'missed_training_id', label: 'Пропущенное занятие',
+              type: 'select', options: misses },
+            { name: 'comment', label: 'Пояснение', placeholder: 'Согласовано с тренером' }
+          ],
+          onSubmit: function (values) {
+            values.athlete_id = athleteId;
+            return api('POST', '/trainings/' + t.id + '/makeup', values)
+              .then(function (result) {
+                if (!result.ok) { return result; }
+                toast('Отработка добавлена');
+                screenTraining(t.id);
+              });
+          }
+        });
+      }, 80);
+    });
+  }
+
+  /* =====================================================
+     Журнал группы за месяц
+     ===================================================== */
+
+  /** Короткий знак отметки для клетки журнала. */
+  function cellOf(mark) {
+    if (!mark) { return { sign: '·', cls: 'none', title: 'нет отметки' }; }
+    if (mark.makeup_for) { return { sign: 'о', cls: 'makeup', title: 'отработка, не списано' }; }
+    if (mark.status === 'present') { return { sign: '+', cls: 'yes', title: 'был' }; }
+    if (mark.status === 'absent_sick') { return { sign: 'б', cls: 'sick', title: 'болел' }; }
+    if (mark.status === 'absent') { return { sign: '−', cls: 'no', title: 'пропуск' }; }
+    return { sign: '×', cls: 'off', title: 'отменено школой' };
+  }
+
+  function shiftMonth(month, by) {
+    var p = month.split('-');
+    var d = new Date(Number(p[0]), Number(p[1]) - 1 + by, 1);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
+  }
+
+  // Именительный падеж отдельным списком: выводить его
+  // из родительного обрезанием окончаний нельзя — «мая»
+  // так превращается в «маь»
+  var MONTHS_N = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+                  'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+
+  function monthTitle(month) {
+    var p = month.split('-');
+    return MONTHS_N[Number(p[1]) - 1] + ' ' + p[0];
+  }
+
+  function screenJournal(groupId, month) {
+    drawTabs('groups');
+    loading();
+
+    var when = /^\d{4}-\d{2}$/.test(month || '') ? month : isoDate(new Date()).slice(0, 7);
+
+    Promise.all([
+      api('GET', '/groups/' + groupId),
+      api('GET', '/groups/' + groupId + '/attendance?month=' + when)
+    ]).then(function (results) {
+      if (!results[1].ok) { return fail(results[1]); }
+
+      var g = results[0].data;
+      var data = results[1].data;
+      var box = clear(page);
+
+      box.appendChild(backLink('groups/' + groupId, g.code ? g.code : 'Группа'));
+      box.appendChild(heading('Журнал: ' + (g.code || ''), monthTitle(when), [
+        el('a', { class: 'btn btn--ghost btn--small',
+          href: '#/journal/' + groupId + '/' + shiftMonth(when, -1) }, '← Месяц назад'),
+        el('a', { class: 'btn btn--ghost btn--small',
+          href: '#/journal/' + groupId + '/' + shiftMonth(when, 1) }, 'Месяц вперёд →')
+      ]));
+
+      if (!data.columns.length) {
+        box.appendChild(board([el('p', { class: 'empty', text:
+          'В этом месяце занятий не было' })]));
+        return;
+      }
+
+      var head = el('tr', null, [el('th', { class: 'jn__name' }, 'Спортсмен')]);
+      data.columns.forEach(function (c) {
+        head.appendChild(el('th', { class: 'jn__day', title: c.date + ', ' + c.time_start },
+          el('a', { href: '#/training/' + c.training_id }, String(c.day))));
+      });
+      head.appendChild(el('th', { class: 'jn__sum', title: 'был' }, 'был'));
+      head.appendChild(el('th', { class: 'jn__sum', title: 'пропуски' }, 'нет'));
+      head.appendChild(el('th', { class: 'jn__sum', title: 'списано занятий' }, 'спис.'));
+
+      var body = data.rows.map(function (r) {
+        var tr = el('tr', null, [
+          el('td', { class: 'jn__name' },
+             el('a', { class: 'linkish', href: '#/athletes/' + r.athlete_id }, r.name))
+        ]);
+        r.cells.forEach(function (mark) {
+          var c = cellOf(mark);
+          tr.appendChild(el('td', { class: 'jn__cell jn--' + c.cls, title: c.title }, c.sign));
+        });
+        tr.appendChild(el('td', { class: 'jn__sum' }, String(r.present)));
+        tr.appendChild(el('td', { class: 'jn__sum' }, String(r.absent)));
+        tr.appendChild(el('td', { class: 'jn__sum' }, String(r.charged)));
+        return tr;
+      });
+
+      box.appendChild(el('div', { class: 'board board--wide' }, [
+        el('table', { class: 'rows jn' }, [
+          el('thead', null, [head]),
+          el('tbody', null, body)
+        ])
+      ]));
+
+      box.appendChild(el('p', { class: 'field__note', text:
+        '+ был · − пропуск · б болел · о отработка (не списывается) · × отменено школой. '
+        + 'Столбец «спис.» — сколько занятий ушло с абонемента.' }));
+    });
+  }
+
+  /* =====================================================
      Услуги и цены
      ===================================================== */
 
@@ -1796,6 +2156,8 @@
     if (where === 'athletes') { return parts[1] ? screenAthlete(parts[1]) : screenAthletes(); }
     if (where === 'groups')   { return parts[1] ? screenGroup(parts[1]) : screenGroups(); }
     if (where === 'schedule') { return screenSchedule(parts[1]); }
+    if (where === 'training' && parts[1]) { return screenTraining(parts[1]); }
+    if (where === 'journal'  && parts[1]) { return screenJournal(parts[1], parts[2]); }
     if (where === 'coaches'  && can(['admin'])) { return screenCoaches(); }
     if (where === 'parents'  && can(['admin'])) { return screenParents(); }
     if (where === 'tariffs'  && can(['admin'])) { return screenTariffs(); }

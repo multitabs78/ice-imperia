@@ -337,6 +337,153 @@ async function fillSheet(page, values, submitText) {
         await page.textContent('.week'));
   await page.screenshot({ path: OUT + '/cab-schedule.png' });
 
+  console.log('\nОтметки');
+
+  // Занятие вчерашним днём: будущее отмечать нельзя,
+  // и это проверяется отдельно
+  const yesterday = await page.evaluate(() => {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
+         + '-' + ('0' + d.getDate()).slice(-2);
+  });
+
+  await page.goto(BASE + '/cabinet/#/schedule/' + yesterday, { waitUntil: 'load' });
+  await page.waitForSelector('.head h1:has-text("Расписание")', { timeout: 8000 });
+  await page.waitForTimeout(500);
+
+  const made = await page.evaluate(async (date) => {
+    const groups = await (await fetch('/api/v1/groups', { credentials: 'same-origin' })).json();
+    const venues = await (await fetch('/api/v1/venues', { credentials: 'same-origin' })).json();
+    const r = await fetch('/api/v1/trainings', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group_id: groups.items[0].id, date: date,
+        time_start: '16:00', kind: 'ice', venue_id: venues.items[0].id })
+    });
+    return (await r.json()).id;
+  }, yesterday);
+
+  await page.goto(BASE + '/cabinet/#/training/' + made, { waitUntil: 'load' });
+  await page.waitForSelector('.mk', { timeout: 8000 });
+  check('лист отметок открылся', (await page.locator('.mk').count()) >= 1,
+        'строк: ' + (await page.locator('.mk').count()));
+  check('у каждого три кнопки',
+        (await page.locator('.mk').first().locator('.pick').count()) === 3);
+  check('пока никто не отмечен',
+        (await page.textContent('.page')).includes('Без отметки'),
+        await page.textContent('.page'));
+
+  await page.click('.mk:first-child .pick[data-mark="absent"]');
+  check('нажатая кнопка подсвечена',
+        await page.locator('.mk:first-child .pick[data-mark="absent"]')
+                  .evaluate(n => n.classList.contains('is-on')));
+  check('счётчик пересчитался',
+        (await page.textContent('.page')).includes('Отмечены все')
+        || !(await page.textContent('.page')).includes('Без отметки: 1'),
+        await page.textContent('.page'));
+
+  await page.click('text=Все были');
+  check('«все были» ставит всем присутствие',
+        await page.locator('.mk:first-child .pick[data-mark="present"]')
+                  .evaluate(n => n.classList.contains('is-on')));
+  check('и отмечены все', (await page.textContent('.page')).includes('Отмечены все'));
+  await page.waitForTimeout(400);   // дать доиграть подсветке кнопок
+  await page.screenshot({ path: OUT + '/cab-marks.png' });
+
+  await page.click('.markbar button:has-text("Сохранить")');
+  await page.waitForTimeout(900);
+  check('отметки сохранены без лишних вопросов',
+        !(await page.isVisible('dialog.sheet[open]')),
+        await page.textContent('dialog.sheet').catch(() => ''));
+  check('занятие стало проведённым',
+        (await page.textContent('.page')).includes('проведено')
+        || (await page.locator('.pick.is-on').count()) >= 1,
+        'отмеченных: ' + (await page.locator('.pick.is-on').count()));
+
+  // Исправление уже сохранённого — только с причиной
+  await page.click('.mk:first-child .pick[data-mark="absent"]');
+  await page.click('.markbar button:has-text("Сохранить")');
+  await page.waitForSelector('dialog.sheet[open]', { timeout: 6000 });
+  check('исправление спрашивает причину',
+        (await page.textContent('dialog.sheet')).includes('причина')
+        || (await page.textContent('dialog.sheet')).includes('Основание'),
+        await page.textContent('dialog.sheet'));
+
+  await fillSheet(page, { reason: 'Ушёл раньше' });
+  await page.waitForTimeout(900);
+  check('с причиной исправление прошло',
+        await page.locator('.mk:first-child .pick[data-mark="absent"]')
+                  .evaluate(n => n.classList.contains('is-on')));
+
+  // Отработка: два шага — кто и какой пропуск
+  await page.click('.markbar button:has-text("Добавить отработку")');
+  await page.waitForSelector('dialog.sheet[open]', { timeout: 6000 });
+  check('первый шаг спрашивает спортсмена',
+        (await page.textContent('dialog.sheet')).includes('Спортсмен'),
+        await page.textContent('dialog.sheet'));
+
+  await page.locator('dialog.sheet button[type=submit]').click();
+  await page.waitForTimeout(900);
+  const makeupStep = await page.textContent('dialog.sheet').catch(() => '');
+  check('второй шаг предлагает выбрать пропуск или честно говорит, что их нет',
+        makeupStep.includes('пропуск') || makeupStep.includes('нет отмеченных пропусков'),
+        makeupStep);
+  await page.locator('dialog.sheet button:has-text("Отмена")').click().catch(() => {});
+  await page.keyboard.press('Escape').catch(() => {});
+
+  // Будущее занятие отмечать нельзя
+  const future = await page.evaluate(async () => {
+    const d = new Date(); d.setDate(d.getDate() + 3);
+    const date = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
+               + '-' + ('0' + d.getDate()).slice(-2);
+    const groups = await (await fetch('/api/v1/groups', { credentials: 'same-origin' })).json();
+    const venues = await (await fetch('/api/v1/venues', { credentials: 'same-origin' })).json();
+    const r = await fetch('/api/v1/trainings', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group_id: groups.items[0].id, date: date,
+        time_start: '16:00', kind: 'ice', venue_id: venues.items[0].id })
+    });
+    return (await r.json()).id;
+  });
+
+  await page.goto(BASE + '/cabinet/#/training/' + future, { waitUntil: 'load' });
+  await page.waitForSelector('.mk', { timeout: 8000 });
+  check('будущее занятие объясняет, почему не отметить',
+        (await page.textContent('.page')).includes('ещё не прошло'),
+        await page.textContent('.page'));
+  check('и кнопки сохранения нет',
+        (await page.locator('.markbar button:has-text("Сохранить")').count()) === 0);
+
+  console.log('\nЖурнал за месяц');
+
+  await page.goto(BASE + '/cabinet/#/groups', { waitUntil: 'load' });
+  await page.waitForSelector('.rows tbody tr');
+  await page.click('tr:has-text("СОГ-1")');
+  await page.waitForSelector('.head h1:has-text("СОГ-1")');
+  await page.click('text=Журнал посещений');
+  await page.waitForSelector('.jn', { timeout: 8000 });
+  check('журнал открылся', (await page.locator('.jn tbody tr').count()) >= 1,
+        'строк: ' + (await page.locator('.jn tbody tr').count()));
+  check('есть столбцы занятий', (await page.locator('.jn__day').count()) >= 1,
+        'столбцов: ' + (await page.locator('.jn__day').count()));
+  check('отметки проставлены знаками',
+        (await page.locator('.jn--yes, .jn--no, .jn--sick').count()) >= 1,
+        'заполненных клеток: '
+        + (await page.locator('.jn--yes, .jn--no, .jn--sick').count()));
+  check('итоги по строке есть', (await page.locator('.jn__sum').count()) >= 3);
+  check('расшифровка знаков показана',
+        (await page.textContent('.page')).includes('отработка'),
+        await page.textContent('.page'));
+  await page.screenshot({ path: OUT + '/cab-journal.png' });
+
+  const before = await page.textContent('.head__count');
+  await page.click('text=Месяц назад');
+  await page.waitForTimeout(800);
+  check('месяц переключается',
+        (await page.textContent('.head__count')) !== before,
+        before + ' → ' + (await page.textContent('.head__count')));
+
   console.log('\nГраницы доступа тренера');
 
   await page.click('#out');
@@ -405,6 +552,26 @@ async function fillSheet(page, values, submitText) {
         await sp.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
         await sp.evaluate(() => document.documentElement.scrollWidth + ' > ' + window.innerWidth));
   await sp.screenshot({ path: OUT + '/cab-mobile.png', fullPage: true });
+
+  // Главный экран тренера — лист отметок с телефона у борта
+  const anyHeld = await sp.evaluate(async () => {
+    const t = await (await fetch('/api/v1/trainings?from=2000-01-01&to=2099-01-01',
+                                 { credentials: 'same-origin' })).json();
+    const one = t.items.find(x => x.status === 'held');
+    return one ? one.id : null;
+  });
+  if (anyHeld) {
+    await sp.goto(BASE + '/cabinet/#/training/' + anyHeld, { waitUntil: 'load' });
+    await sp.waitForSelector('.mk', { timeout: 8000 });
+    await sp.waitForTimeout(600);
+    check('лист отметок на телефоне без горизонтальной прокрутки',
+          await sp.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+          await sp.evaluate(() => document.documentElement.scrollWidth + ' > ' + window.innerWidth));
+    check('кнопки отметок крупные',
+          await sp.locator('.pick').first().evaluate(n => n.getBoundingClientRect().height >= 40),
+          await sp.locator('.pick').first().evaluate(n => Math.round(n.getBoundingClientRect().height) + 'px'));
+    await sp.screenshot({ path: OUT + '/cab-marks-mobile.png', fullPage: true });
+  }
 
   console.log('\nОшибки в консоли');
   check('консоль чистая', problems.length === 0, problems.join(' | '));

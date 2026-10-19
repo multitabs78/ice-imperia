@@ -220,6 +220,116 @@ body.app{
 .tr__act{display:flex;flex-wrap:wrap;gap:10px;margin-top:7px}
 .tr__act .linkish{font-size:12.5px}
 
+/* --- Лист отметок ----------------------------------------- */
+
+.sheet-list{padding:4px 0}
+
+.mk{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  padding:10px 16px;
+  border-top:1px solid var(--ink-12);
+}
+.mk:first-child{border-top:0}
+
+.mk__who{flex:1;min-width:0;font-size:15.5px}
+.mk__pick{display:flex;gap:6px;flex-shrink:0}
+
+/* Кнопки крупные: тренер жмёт их на телефоне у борта,
+   часто в перчатке */
+.pick{
+  min-width:62px;
+  padding:11px 10px;
+  font:400 14.5px/1 var(--font-text);
+  color:var(--ink-70);
+  background:var(--white);
+  border:1px solid var(--ink-12);
+  border-radius:var(--r);
+  cursor:pointer;
+  transition:background-color .2s var(--ease),border-color .2s var(--ease),color .2s var(--ease);
+}
+.pick:hover{border-color:rgba(44,36,22,.26)}
+.pick:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+
+.pick[data-mark="present"].is-on{
+  background:var(--blue);border-color:var(--blue);color:var(--white);
+}
+.pick[data-mark="absent"].is-on{
+  background:var(--alarm);border-color:var(--alarm);color:var(--white);
+}
+.pick[data-mark="absent_sick"].is-on{
+  background:var(--gold);border-color:var(--gold);color:#3A2A0B;
+}
+
+.linkish--strong{font-weight:500}
+
+/* Кнопки действий держатся внизу экрана: в группе
+   на пятнадцать человек иначе придётся листать
+   до «Сохранить» и обратно */
+.markbar{
+  position:sticky;
+  bottom:0;
+  z-index:10;
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin:14px -16px -72px;
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+  background:rgba(248,245,240,.94);
+  backdrop-filter:blur(8px);
+  border-top:1px solid var(--ink-12);
+}
+.markbar .btn{flex:1;min-width:120px}
+
+/* --- Журнал за месяц -------------------------------------- */
+
+/* Единственная таблица, которой горизонтальная прокрутка
+   идёт на пользу: в месяце бывает двадцать занятий, и сжать
+   их в ширину экрана значит сделать нечитаемыми */
+.board--wide{
+  overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+  width:fit-content;
+  max-width:100%;
+}
+
+/* Таблица по содержимому, а не во всю ширину: иначе три
+   занятия растягиваются на весь экран и читаются хуже */
+.jn{width:auto;min-width:max-content;font-variant-numeric:tabular-nums}
+.jn th{padding:8px 6px;text-align:center}
+.jn td{padding:7px 6px;text-align:center}
+
+.jn__name{
+  position:sticky;
+  left:0;
+  z-index:1;
+  text-align:left !important;
+  background:var(--white);
+  white-space:nowrap;
+  min-width:170px;
+}
+.jn thead .jn__name{background:var(--sand)}
+
+.jn__day{min-width:30px}
+.jn__day a{color:inherit;text-decoration:none}
+.jn__day a:hover{color:var(--blue);text-decoration:underline}
+
+.jn__cell{font-size:16px;line-height:1;width:30px}
+.jn--yes{color:var(--blue);font-weight:500}
+.jn--no{color:var(--alarm);font-weight:500}
+.jn--sick{color:#7A5A22;font-weight:500}
+.jn--makeup{color:var(--blue-dark)}
+.jn--off{color:var(--ink-45)}
+.jn--none{color:rgba(44,36,22,.22)}
+
+.jn__sum{
+  min-width:44px;
+  font-size:13.5px;
+  color:var(--ink-70);
+  border-left:1px solid var(--ink-12);
+}
+
 /* --- Карточка записи -------------------------------------- */
 
 .back{
@@ -344,6 +454,14 @@ dialog.sheet::backdrop{background:rgba(15,28,36,.55)}
   }
   .rows td.title{font-size:16px;font-weight:500;padding-bottom:4px}
 
+  /* Журнал — исключение: он остаётся таблицей и прокручивается
+     вбок, потому что сетка «люди × дни» и есть его смысл */
+  .jn, .jn thead, .jn tbody, .jn tr, .jn td, .jn th{display:revert;width:auto}
+  .jn thead{display:table-header-group}
+  .jn tr{padding:0;border-top:0}
+  .jn td{padding:7px 6px;border:0}
+  .jn td[data-label]::before{content:none}
+
   /* Неделя на телефоне — в одну колонку: семь узких
      столбцов рядом нечитаемы */
   .week{grid-template-columns:1fr;gap:8px}
@@ -358,4 +476,11 @@ dialog.sheet::backdrop{background:rgba(15,28,36,.55)}
   .day.is-empty .day__head{border-bottom:0;flex:1}
   .day.is-empty .day__body{padding:10px 12px}
   .day.is-empty .day__empty{margin:0;font-size:12.5px}
+
+  /* Лист отметок на телефоне: имя сверху, кнопки во всю
+     ширину — по ним попадают пальцем, не глядя */
+  .mk{flex-direction:column;align-items:stretch;gap:8px;padding:12px 14px}
+  .mk__pick{width:100%}
+  .pick{flex:1;min-width:0;padding:13px 8px}
+  .markbar{margin:14px -12px -60px;padding-left:12px;padding-right:12px}
 }

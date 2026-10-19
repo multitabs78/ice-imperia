@@ -853,6 +853,255 @@ $r = call('POST', '/groups/' . $group1 . '/schedule', array(
     'venue_id' => $venue, 'valid_from' => $season), $coachToken);
 check('тренер расписание не правит', $r['status'] === 403, 'код ' . $r['status']);
 
+echo "\nПосещаемость: лист отметок\n";
+
+// Своя группа со своими спортсменами: так проверки
+// не зависят от того, что осталось от прежних разделов
+$r = call('POST', '/groups', array('code' => 'ПОС-1', 'name' => 'Для отметок'), $admin);
+$gm = $r['body']['id'];
+call('POST', '/groups/' . $gm . '/coaches', array('coach_id' => $coach), $admin);
+
+$long = date('Y-m-d', strtotime('-90 days'));
+$kids = array();
+foreach (array(array('Белов', 'Пётр'), array('Волкова', 'Аня'), array('Громов', 'Лев')) as $one) {
+    $r = call('POST', '/athletes', array(
+        'last_name' => $one[0], 'first_name' => $one[1], 'birth_date' => '2016-05-05'), $admin);
+    $kids[$one[0]] = $r['body']['id'];
+    call('POST', '/enrollments', array('athlete_id' => $r['body']['id'],
+         'group_id' => $gm, 'date_from' => $long), $admin);
+}
+
+$yesterday = date('Y-m-d', strtotime('-1 day'));
+$twoAgo    = date('Y-m-d', strtotime('-2 days'));
+$tomorrow  = date('Y-m-d', strtotime('+1 day'));
+
+$r = call('POST', '/trainings', array('group_id' => $gm, 'date' => $yesterday,
+    'time_start' => '17:00', 'kind' => 'ice', 'venue_id' => $venue,
+    'coach_id' => $coach), $admin);
+$t1 = $r['body']['id'];
+check('вчерашнее занятие заведено', $r['status'] === 201 && $t1,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('GET', '/trainings/' . $t1 . '/attendance', null, $coachToken);
+check('лист отметок отдаётся тренеру', $r['status'] === 200, 'код ' . $r['status']);
+check('в листе весь состав группы', count($r['body']['items']) === 3,
+      'человек: ' . count($r['body']['items']));
+check('отмечать можно', $r['body']['can_mark'] === true, $r['raw']);
+check('пока ничего не отмечено', $r['body']['items'][0]['mark'] === null, $r['raw']);
+
+$r = call('POST', '/trainings/' . $t1 . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Белов'],   'status' => 'present'),
+    array('athlete_id' => $kids['Волкова'], 'status' => 'absent'),
+    array('athlete_id' => $kids['Громов'],  'status' => 'absent_sick'),
+)), $coachToken);
+check('группа отмечена одним действием', $r['status'] === 200 && $r['body']['saved'] === 3,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$status = $pdo->query('SELECT status FROM trainings WHERE id = ' . (int) $t1)->fetchColumn();
+check('отмеченное занятие стало проведённым', $status === 'held', 'состояние: ' . $status);
+
+$r = call('GET', '/trainings/' . $t1 . '/attendance', null, $coachToken);
+$byName = array();
+foreach ($r['body']['items'] as $one) { $byName[$one['name']] = $one; }
+check('пропуск списывает занятие',
+      $byName['Волкова Аня']['mark']['charged'] === true, $r['raw']);
+check('болезнь списывает так же',
+      $byName['Громов Лев']['mark']['charged'] === true, $r['raw']);
+check('отметка названа словами',
+      $byName['Громов Лев']['mark']['label'] === 'пропуск по болезни', $r['raw']);
+
+$r = call('POST', '/trainings/' . $t1 . '/cancel', array('reason' => 'Передумали'), $admin);
+check('отмеченное занятие уже не отменить', $r['status'] === 409
+      && $r['body']['error'] === 'training_held', 'код ' . $r['status']);
+
+echo "\nИсправление отметок\n";
+
+$r = call('POST', '/trainings/' . $t1 . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Волкова'], 'status' => 'present'),
+)), $coachToken);
+check('исправление без причины не проходит', $r['status'] === 422
+      && isset($r['body']['fields']['reason']), 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$was = $pdo->query('SELECT status FROM attendance WHERE training_id = ' . (int) $t1
+                   . ' AND athlete_id = ' . (int) $kids['Волкова'])->fetchColumn();
+check('и ничего не меняет', $was === 'absent', 'в базе: ' . $was);
+
+$r = call('POST', '/trainings/' . $t1 . '/attendance', array(
+    'reason' => 'Опоздала, но была',
+    'marks' => array(array('athlete_id' => $kids['Волкова'], 'status' => 'present'))), $coachToken);
+check('с причиной исправляется', $r['status'] === 200 && $r['body']['changed'] === 1,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$why = $pdo->query("SELECT reason FROM audit_log WHERE entity = 'attendance'
+                     AND action = 'update' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check('причина исправления в журнале', $why === 'Опоздала, но была', 'причина: ' . $why);
+
+$r = call('POST', '/trainings/' . $t1 . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Белов'], 'status' => 'present'),
+)), $coachToken);
+check('повтор той же отметки причины не требует', $r['status'] === 200
+      && $r['body']['changed'] === 0, 'изменено: ' . $r['body']['changed']);
+
+echo "\nКогда отмечать нельзя\n";
+
+$r = call('POST', '/trainings', array('group_id' => $gm, 'date' => $tomorrow,
+    'time_start' => '17:00', 'kind' => 'ice', 'venue_id' => $venue), $admin);
+$future = $r['body']['id'];
+
+$r = call('GET', '/trainings/' . $future . '/attendance', null, $coachToken);
+check('будущее занятие отмечать нельзя', $r['body']['can_mark'] === false
+      && strpos($r['body']['closed_why'], 'ещё не прошло') !== false,
+      $r['body']['closed_why']);
+
+$r = call('POST', '/trainings/' . $future . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Белов'], 'status' => 'present'))), $coachToken);
+check('и запрос отклоняется', $r['status'] === 409
+      && $r['body']['error'] === 'marking_closed', 'код ' . $r['status']);
+
+$r = call('POST', '/trainings/' . $future . '/cancel', array('reason' => 'Каникулы'), $admin);
+$r = call('POST', '/trainings/' . $future . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Белов'], 'status' => 'present'))), $admin);
+check('отменённое занятие отмечать нечего', $r['status'] === 409, 'код ' . $r['status']);
+
+$r = call('POST', '/trainings/' . $t1 . '/attendance', array('marks' => array(
+    array('athlete_id' => $newAthlete, 'status' => 'present'))), $coachToken);
+check('чужого в лист не вписать', $r['status'] === 422, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+// Окно правки: ставим сутки и заводим занятие пятидневной давности
+call('PATCH', '/settings', array('coach_edit_window_days' => '1',
+                                 'reason' => 'Для проверки'), $admin);
+$old5 = date('Y-m-d', strtotime('-5 days'));
+$r = call('POST', '/trainings', array('group_id' => $gm, 'date' => $old5,
+    'time_start' => '17:00', 'kind' => 'ice', 'venue_id' => $venue), $admin);
+$stale = $r['body']['id'];
+
+$r = call('POST', '/trainings/' . $stale . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Белов'], 'status' => 'present'))), $coachToken);
+check('после срока тренер не отмечает', $r['status'] === 409
+      && strpos($r['body']['message'], 'администратор') !== false,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/trainings/' . $stale . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Белов'], 'status' => 'present'))), $admin);
+check('администратор отмечает и после срока', $r['status'] === 200, 'код ' . $r['status']);
+
+call('PATCH', '/settings', array('coach_edit_window_days' => '3',
+                                 'reason' => 'Обратно'), $admin);
+
+echo "\nОтработка пропуска\n";
+
+$r = call('POST', '/trainings', array('group_id' => $gm, 'date' => $twoAgo,
+    'time_start' => '17:00', 'kind' => 'ice', 'venue_id' => $venue), $admin);
+$t2 = $r['body']['id'];
+call('POST', '/trainings/' . $t2 . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Белов'], 'status' => 'absent'),
+    array('athlete_id' => $kids['Волкова'], 'status' => 'present'))), $coachToken);
+
+$r = call('POST', '/trainings/' . $t1 . '/makeup', array(
+    'athlete_id' => $kids['Белов'], 'missed_training_id' => $t2), $coachToken);
+check('отработка не заводится дважды на одно занятие', $r['status'] === 409
+      && $r['body']['error'] === 'already_marked', 'код ' . $r['status'] . ' ' . $r['raw']);
+
+// Отработка в другой группе — обычный случай
+$r = call('POST', '/trainings', array('group_id' => $group1, 'date' => $yesterday,
+    'time_start' => '19:30', 'kind' => 'ice', 'venue_id' => $venue), $admin);
+$other = $r['body']['id'];
+
+$r = call('POST', '/trainings/' . $other . '/makeup', array(
+    'athlete_id' => $kids['Белов'], 'missed_training_id' => $t2,
+    'comment' => 'Согласовано с тренером'), $admin);
+check('отработка заведена', $r['status'] === 201, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('отработка не списывает занятие', $r['body']['charged'] === false, $r['raw']);
+check('видно, какой пропуск она закрывает',
+      (int) $r['body']['makeup_for'] === (int) $t2, $r['raw']);
+$makeupId = $r['body']['id'];
+
+// Второй раз тот же пропуск — уже на другом занятии,
+// иначе сработает запрет двух отметок на одном и настоящая
+// проверка «пропуск отрабатывается один раз» не проверится
+$r = call('POST', '/trainings', array('group_id' => $group1, 'date' => $yesterday,
+    'time_start' => '20:30', 'kind' => 'gym', 'venue_id' => $venue), $admin);
+$other2 = $r['body']['id'];
+
+$r = call('POST', '/trainings/' . $other2 . '/makeup', array(
+    'athlete_id' => $kids['Белов'], 'missed_training_id' => $t2), $admin);
+check('один пропуск отрабатывается один раз', $r['status'] === 409
+      && $r['body']['error'] === 'already_made_up', 'код ' . $r['status'] . ' ' . $r['raw']);
+
+// Правка отработки не должна превращать её в списанное
+// занятие: пропуск уже списан раньше
+$r = call('POST', '/trainings/' . $other . '/attendance', array(
+    'reason' => 'Всё-таки не пришёл',
+    'marks' => array(array('athlete_id' => $kids['Белов'], 'status' => 'absent'))), $admin);
+check('отработку можно исправить', $r['status'] === 200, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$after = $pdo->query('SELECT charged, makeup_for_training_id FROM attendance
+                       WHERE training_id = ' . (int) $other . '
+                         AND athlete_id = ' . (int) $kids['Белов'])->fetch();
+check('и она остаётся отработкой, без списания',
+      (int) $after['charged'] === 0 && (int) $after['makeup_for_training_id'] === (int) $t2,
+      json_encode($after));
+
+$r = call('POST', '/trainings/' . $other . '/makeup', array(
+    'athlete_id' => $kids['Волкова'], 'missed_training_id' => $t2), $admin);
+check('посещённое занятие не отрабатывают', $r['status'] === 409
+      && $r['body']['error'] === 'not_a_miss', 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('GET', '/trainings/' . $other . '/attendance', null, $admin);
+$found = null;
+foreach ($r['body']['items'] as $one) {
+    if ((int) $one['athlete_id'] === (int) $kids['Белов']) { $found = $one; }
+}
+check('отработавший виден в листе чужой группы', $found && $found['makeup'] === true,
+      $r['raw']);
+
+$r = call('DELETE', '/attendance/' . $makeupId, null, $admin);
+check('снять отработку без причины нельзя', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('DELETE', '/attendance/' . $makeupId . '?reason=' . rawurlencode('Ошиблись'), null, $admin);
+check('с причиной снимается', $r['status'] === 200, 'код ' . $r['status']);
+
+$mark = $pdo->query('SELECT id FROM attendance WHERE training_id = ' . (int) $t1
+                    . ' AND athlete_id = ' . (int) $kids['Белов'])->fetchColumn();
+$r = call('DELETE', '/attendance/' . $mark . '?reason=' . rawurlencode('Просто так'), null, $admin);
+check('обычную отметку удалить нельзя — только исправить', $r['status'] === 409
+      && $r['body']['error'] === 'not_a_makeup', 'код ' . $r['status']);
+
+echo "\nЖурнал группы\n";
+
+$r = call('GET', '/groups/' . $gm . '/attendance?month=' . date('Y-m'), null, $coachToken);
+check('журнал отдаётся', $r['status'] === 200, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('в журнале три строки', count($r['body']['rows']) === 3,
+      'строк: ' . count($r['body']['rows']));
+check('столбцов ровно по числу занятий месяца',
+      count($r['body']['columns']) === count($r['body']['rows'][0]['cells']),
+      'столбцов ' . count($r['body']['columns'])
+      . ', клеток ' . count($r['body']['rows'][0]['cells']));
+
+$row = null;
+foreach ($r['body']['rows'] as $one) { if ($one['name'] === 'Громов Лев') { $row = $one; } }
+check('итоги по человеку посчитаны', $row && $row['absent'] === 1 && $row['charged'] === 1,
+      json_encode($row, JSON_UNESCAPED_UNICODE));
+
+$r = call('GET', '/groups/' . $gm . '/attendance?month=2026-13', null, $admin);
+check('тринадцатого месяца не бывает', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('GET', '/groups/' . $group2 . '/attendance?month=' . date('Y-m'), null, $coachToken);
+check('журнал чужой группы тренеру закрыт', $r['status'] === 403, 'код ' . $r['status']);
+
+echo "\nИстория спортсмена\n";
+
+$r = call('GET', '/athletes/' . $kids['Белов'] . '/attendance?from='
+          . date('Y-m-d', strtotime('-10 days')) . '&to=' . date('Y-m-d'), null, $admin);
+check('история посещений отдаётся', $r['status'] === 200 && count($r['body']['items']) >= 2,
+      'записей: ' . count($r['body']['items']));
+check('в записи видно группу и дату',
+      isset($r['body']['items'][0]['group_code']) && isset($r['body']['items'][0]['date']),
+      $r['raw']);
+
+$r = call('GET', '/athletes/' . $kids['Белов'] . '/attendance', null, $coach2Token);
+check('посторонний тренер историю не видит', $r['status'] === 403, 'код ' . $r['status']);
+
 echo "\nЖурнал справочников\n";
 
 $kinds = $pdo->query("SELECT DISTINCT entity FROM audit_log")->fetchAll(PDO::FETCH_COLUMN);
@@ -861,6 +1110,8 @@ check('в журнале есть записи по справочникам',
       implode(', ', $kinds));
 check('в журнале есть записи по расписанию',
       in_array('schedule_rule', $kinds) && in_array('training', $kinds),
+      implode(', ', $kinds));
+check('в журнале есть записи по отметкам', in_array('attendance', $kinds),
       implode(', ', $kinds));
 
 $move = $pdo->query("SELECT reason FROM audit_log WHERE action = 'move' LIMIT 1")->fetchColumn();
