@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /send.php
+Disallow: /data/
+
+Sitemap: https://ice-imperia.ru/sitemap.xml

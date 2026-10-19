@@ -1,0 +1,1740 @@
+/* =========================================================
+   Империя льда — стили
+   Палитра, типографика, компоненты, адаптив
+   ========================================================= */
+
+:root{
+  --white:#FFFFFF;
+  --sand:#F8F5F0;
+  --ink:#2C2416;
+  --ink-70:rgba(44,36,22,.70);
+  --ink-45:rgba(44,36,22,.45);
+  --ink-12:rgba(44,36,22,.12);
+  --blue:#0095BA;
+  --blue-dark:#007693;
+  --gold:#CD9E55;
+  --gold-dark:#B4863F;
+  --silver:#E8EEF0;
+  --deep:#0F1C24;
+  --deep-2:#1A2A32;
+
+  /* Шрифты подключены локально, см. блок @font-face ниже.
+     Обе гарнитуры с кириллицей. Дальше в списке —
+     системные запасные варианты на случай сбоя загрузки. */
+  --font-display:"Prata",Georgia,"Times New Roman",serif;
+  --font-text:"Golos Text",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+
+  --shell:1200px;
+  --gap:clamp(20px,4vw,40px);
+  --sec-y:clamp(72px,9vw,132px);
+  --r:4px;              /* сдержанные скругления */
+  --ease:cubic-bezier(.25,.6,.25,1);
+}
+
+/* ---------- Свои шрифты ----------
+   Файлы лежат в assets/fonts/, к сторонним серверам сайт не обращается.
+   Заголовки — Prata, основной текст — Golos Text: обе гарнитуры
+   содержат кириллицу. Чтобы сменить шрифт, положите новые файлы
+   под этими же именами либо поправьте пути ниже и переменные
+   --font-display / --font-text выше. */
+@font-face{
+  font-family:"Prata";
+  src:url("assets/fonts/prata-400.woff2") format("woff2");
+  font-weight:400;
+  font-style:normal;
+  font-display:swap;
+}
+@font-face{
+  font-family:"Golos Text";
+  src:url("assets/fonts/golos-text-400.woff2") format("woff2");
+  font-weight:400;
+  font-style:normal;
+  font-display:swap;
+}
+@font-face{
+  font-family:"Golos Text";
+  src:url("assets/fonts/golos-text-500.woff2") format("woff2");
+  font-weight:500;
+  font-style:normal;
+  font-display:swap;
+}
+@font-face{
+  font-family:"Golos Text";
+  src:url("assets/fonts/golos-text-600.woff2") format("woff2");
+  font-weight:600;
+  font-style:normal;
+  font-display:swap;
+}
+
+/* ---------- База ---------- */
+*,*::before,*::after{box-sizing:border-box}
+
+html{scroll-behavior:smooth}
+
+body{
+  margin:0;
+  background:var(--white);
+  color:var(--ink);
+  font-family:var(--font-text);
+  font-size:17px;
+  line-height:1.65;
+  font-weight:400;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+
+img{max-width:100%;display:block}
+/* <picture> не должен влиять на раскладку: размеры задаёт сам <img> */
+picture{display:contents}
+
+/* Атрибут hidden должен побеждать любые display в правилах ниже */
+[hidden]{display:none !important}
+ul,ol{margin:0;padding:0;list-style:none}
+p{margin:0 0 1em}
+p:last-child{margin-bottom:0}
+
+a{color:inherit;text-decoration:none}
+
+button{font:inherit;color:inherit}
+
+:focus-visible{
+  outline:2px solid var(--blue);
+  outline-offset:3px;
+  border-radius:2px;
+}
+
+.shell{
+  width:100%;
+  max-width:var(--shell);
+  margin:0 auto;
+  padding:0 var(--gap);
+}
+
+.skip-link{
+  position:absolute;left:-9999px;top:0;z-index:200;
+  background:var(--ink);color:#fff;padding:12px 20px;
+}
+.skip-link:focus{left:16px;top:16px}
+
+/* ---------- Типографика ---------- */
+h1,h2,h3,.h2,.h3,.h4{
+  font-family:var(--font-display);
+  font-weight:400;
+  line-height:1.14;
+  letter-spacing:-.01em;
+  margin:0 0 .5em;
+}
+
+.h2{font-size:clamp(1.75rem,3.4vw,2.75rem);margin-bottom:.6em}
+.h3{font-size:clamp(1.3rem,2.2vw,1.7rem)}
+.h4{font-size:1.25rem}
+
+.eyebrow{
+  display:flex;align-items:center;gap:12px;
+  font-size:.75rem;
+  letter-spacing:.20em;
+  text-transform:uppercase;
+  font-weight:600;
+  color:var(--blue);
+  margin:0 0 18px;
+}
+.eyebrow::before{
+  content:"";width:26px;height:1px;background:var(--gold);flex:0 0 auto;
+}
+.eyebrow--light{color:rgba(255,255,255,.9)}
+.h2--light{color:#fff}
+
+[id]{scroll-margin-top:88px}
+
+.section{padding:var(--sec-y) 0}
+.section--sand{background:var(--sand)}
+
+/* ---------- Кнопки ---------- */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:15px 28px;
+  border:1px solid transparent;
+  border-radius:var(--r);
+  font-size:.95rem;
+  font-weight:600;
+  letter-spacing:.01em;
+  cursor:pointer;
+  text-align:center;
+  transition:background-color .3s var(--ease),color .3s var(--ease),
+             border-color .3s var(--ease),transform .3s var(--ease),
+             box-shadow .3s var(--ease);
+}
+.btn--sm{padding:11px 20px;font-size:.875rem}
+.btn--full{width:100%}
+
+.btn--primary{background:var(--blue);color:#fff}
+.btn--primary:hover{background:var(--blue-dark);transform:translateY(-2px);box-shadow:0 10px 24px rgba(0,149,186,.22)}
+.btn--primary:active{transform:translateY(0);box-shadow:none}
+
+.btn--outline{background:transparent;color:var(--ink);border-color:var(--ink-12)}
+.btn--outline:hover{border-color:var(--blue);color:var(--blue)}
+.btn--outline:active{background:var(--silver)}
+
+.btn--link{
+  background:none;padding:15px 4px;color:var(--ink);
+  border-bottom:1px solid var(--ink-12);border-radius:0;
+}
+.btn--link:hover{color:var(--blue);border-color:var(--blue)}
+
+/* ---------- Шапка ---------- */
+.header{
+  position:fixed;inset:0 0 auto 0;z-index:100;
+  padding:14px 0;
+  transition:background-color .4s var(--ease),box-shadow .4s var(--ease),padding .4s var(--ease);
+}
+.header__inner{display:flex;align-items:center;justify-content:space-between;gap:clamp(16px,2.4vw,32px)}
+
+.header.is-solid{
+  background:rgba(255,255,255,.94);
+  backdrop-filter:blur(10px);
+  box-shadow:0 1px 0 var(--ink-12);
+  padding:8px 0;
+}
+
+.brand{display:flex;align-items:center;gap:12px;flex:0 0 auto}
+/* Логотип не изменяется: он лежит на собственной белой подложке-плашке */
+.brand__mark{
+  width:48px;height:auto;
+  transition:width .4s var(--ease);
+}
+.brand__text{display:flex;flex-direction:column;line-height:1.15}
+.brand__name{
+  font-family:var(--font-display);font-size:1.12rem;letter-spacing:.02em;color:#fff;
+  white-space:nowrap;
+  transition:color .4s var(--ease);
+}
+.brand__sub{
+  font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;white-space:nowrap;
+  color:rgba(255,255,255,.72);transition:color .4s var(--ease);
+}
+.header.is-solid .brand__name{color:var(--ink)}
+.header.is-solid .brand__sub{color:var(--ink-45)}
+.header.is-solid .brand__mark{width:42px}
+
+/* ---- Навигация ---- */
+.nav{display:flex;align-items:center;gap:clamp(18px,2.6vw,40px)}
+.nav__list{display:flex;gap:clamp(14px,2vw,28px)}
+.nav__link{
+  position:relative;display:inline-block;
+  font-size:.95rem;color:rgba(255,255,255,.88);padding:4px 0;
+  white-space:nowrap;
+  transition:color .3s var(--ease);
+}
+.nav__link::after{
+  content:"";position:absolute;left:0;bottom:0;height:1px;width:0;
+  background:var(--gold);transition:width .35s var(--ease);
+}
+.nav__link:hover,.nav__link:focus-visible{color:#fff}
+.nav__link:hover::after,.nav__link:focus-visible::after{width:100%}
+
+/* Текущий раздел: та же тонкая линия, без плашек */
+.nav__link.is-current{color:#fff}
+.nav__link.is-current::after{width:100%;background:var(--gold)}
+
+.header.is-solid .nav__link{color:var(--ink-70)}
+.header.is-solid .nav__link:hover,
+.header.is-solid .nav__link:focus-visible,
+.header.is-solid .nav__link.is-current{color:var(--ink)}
+
+/* ---- Телефон и кнопки ---- */
+.nav__actions{display:flex;align-items:center;gap:clamp(12px,1.6vw,20px)}
+.nav__actions .btn{white-space:nowrap}
+
+/* Телефон подчинён кнопке: тоньше, спокойнее, без заливки */
+.phone{
+  font-size:.9rem;font-weight:500;letter-spacing:.01em;
+  color:rgba(255,255,255,.72);white-space:nowrap;
+  border-bottom:1px solid transparent;
+  transition:color .3s var(--ease),border-color .3s var(--ease);
+}
+.phone:hover,.phone:focus-visible{color:#fff;border-bottom-color:rgba(255,255,255,.5)}
+.header.is-solid .phone{color:var(--ink-45)}
+.header.is-solid .phone:hover,
+.header.is-solid .phone:focus-visible{color:var(--ink);border-bottom-color:var(--ink-12)}
+
+/* Кнопка в строке шапки — только для планшета и мобильного */
+.header__cta{display:none}
+.label-menu,.label-mobile{display:none}
+
+/* ---- Бургер ---- */
+.burger{
+  display:none;width:44px;height:44px;background:none;border:0;padding:10px;
+  cursor:pointer;flex:0 0 auto;
+}
+.burger span{
+  display:block;height:1.5px;background:#fff;margin:5px 0;border-radius:2px;
+  transition:transform .35s var(--ease),opacity .25s var(--ease),background-color .4s var(--ease);
+}
+.header.is-solid .burger span{background:var(--ink)}
+.burger.is-open span{background:var(--ink)}
+.burger.is-open span:nth-child(1){transform:translateY(6.5px) rotate(45deg)}
+.burger.is-open span:nth-child(2){opacity:0}
+.burger.is-open span:nth-child(3){transform:translateY(-6.5px) rotate(-45deg)}
+
+/* ---------- Первый экран ----------
+   Фотография занимает весь экран, текст лежит поверх неё слева.
+   Читаемость обеспечивает боковое затемнение с длинным растворением,
+   а не плашка: у центра кадра, где стоит ребёнок, оно сходит на нет. */
+.hero{
+  position:relative;
+  display:flex;align-items:center;
+  min-height:min(94vh,900px);
+  background:var(--deep);
+  color:#fff;
+  overflow:hidden;
+}
+
+.hero__media{position:absolute;inset:0;margin:0;z-index:0}
+.hero__media img{
+  width:100%;height:100%;
+  object-fit:cover;object-position:50% 42%;
+}
+.hero__media::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:
+    /* лёгкая тень под белую шапку */
+    linear-gradient(180deg,rgba(15,28,36,.42) 0,rgba(15,28,36,0) 220px),
+    /* затемнение слева, полностью растворяется к центру кадра */
+    linear-gradient(90deg,
+      rgba(15,28,36,.74) 0%,
+      rgba(15,28,36,.52) 20%,
+      rgba(15,28,36,.24) 38%,
+      rgba(15,28,36,0) 58%);
+}
+
+.hero__content{
+  position:relative;z-index:1;
+  width:100%;
+  padding:clamp(120px,14vh,170px) var(--gap) clamp(60px,9vh,96px);
+  padding-left:max(var(--gap),calc((100vw - var(--shell)) / 2));
+}
+.hero__text{max-width:min(540px,46vw)}
+
+/* ---- Бренд над заголовком ---- */
+.hero__brand{
+  display:flex;flex-direction:column;gap:6px;
+  margin:0 0 clamp(20px,3vh,32px);
+}
+.hero__brand::before{
+  content:"";width:42px;height:1px;background:var(--gold);margin-bottom:20px;
+}
+.hero__brand-name{
+  font-size:clamp(.82rem,1vw,.95rem);
+  letter-spacing:.30em;text-transform:uppercase;font-weight:600;
+  color:var(--gold);
+}
+.hero__brand-sub{
+  font-size:clamp(.72rem,.85vw,.82rem);
+  letter-spacing:.16em;text-transform:uppercase;
+  color:rgba(255,255,255,.62);
+}
+
+/* ---- Заголовок ---- */
+.hero__title{
+  font-size:clamp(2.05rem,4.2vw,3.6rem);
+  line-height:1.08;
+  margin:0 0 clamp(16px,2.4vh,26px);
+  text-shadow:0 2px 24px rgba(15,28,36,.35);
+}
+.hero__title-accent{display:block;color:var(--gold)}
+
+.hero__lead{
+  max-width:34ch;
+  font-size:clamp(1rem,1.1vw,1.1rem);
+  line-height:1.6;
+  color:rgba(255,255,255,.86);
+  text-shadow:0 1px 16px rgba(15,28,36,.4);
+  margin:0;
+}
+
+/* ---- Действия ---- */
+.hero__actions{
+  display:flex;flex-wrap:wrap;align-items:center;
+  gap:16px clamp(20px,2.4vw,30px);
+  margin-top:clamp(26px,3.6vh,40px);
+}
+.hero__cta{padding:16px 30px}
+.label-short{display:none}
+
+/* Вторичное действие — ссылка, а не вторая кнопка */
+.hero__link{
+  display:inline-flex;align-items:center;gap:9px;
+  font-size:.98rem;font-weight:500;color:rgba(255,255,255,.88);
+  padding-bottom:4px;
+  border-bottom:1px solid rgba(255,255,255,.3);
+  transition:color .3s var(--ease),border-color .3s var(--ease);
+}
+.hero__link span{display:inline-block;transition:transform .3s var(--ease)}
+.hero__link:hover,.hero__link:focus-visible{color:#fff;border-bottom-color:var(--gold)}
+.hero__link:hover span{transform:translateX(5px)}
+
+/* ---- Деликатное появление при загрузке ---- */
+.hero__anim{opacity:0;transform:translateY(16px);animation:hero-in .9s var(--ease) forwards}
+.hero__anim:nth-child(1){animation-delay:.05s}
+.hero__anim:nth-child(2){animation-delay:.16s}
+.hero__anim:nth-child(3){animation-delay:.27s}
+.hero__anim:nth-child(4){animation-delay:.38s}
+@keyframes hero-in{to{opacity:1;transform:none}}
+
+/* ---- Ноутбуки и планшеты в альбомной ориентации ---- */
+@media (max-width:1200px){
+  .hero__text{max-width:min(420px,44vw)}
+  .hero__lead{max-width:30ch}
+}
+
+/* ---- Узкий кадр: ребёнок занимает середину, текст уходит вниз ---- */
+@media (max-width:900px){
+  .hero{align-items:flex-end;min-height:min(86vh,720px)}
+  .hero__media img{object-position:50% 50%}
+  .hero__media::after{
+    background:
+      linear-gradient(180deg,rgba(15,28,36,.34) 0,rgba(15,28,36,0) 180px),
+      linear-gradient(0deg,
+        rgba(15,28,36,.88) 0%,
+        rgba(15,28,36,.72) 22%,
+        rgba(15,28,36,.34) 44%,
+        rgba(15,28,36,0) 66%);
+  }
+  .hero__content{padding:clamp(110px,16vh,140px) var(--gap) clamp(36px,6vw,52px);padding-left:var(--gap)}
+  .hero__text{max-width:min(520px,100%)}
+  .hero__lead{max-width:44ch}
+}
+
+@media (max-width:560px){
+  .hero{min-height:min(84vh,680px)}
+  .hero__title{font-size:clamp(1.95rem,8.2vw,2.45rem)}
+  .hero__lead{font-size:.98rem;max-width:36ch}
+  .hero__brand{margin-bottom:16px}
+  .hero__brand::before{margin-bottom:14px}
+  .hero__actions{gap:14px 18px;margin-top:24px}
+  .hero__cta{width:100%;padding:15px 20px}
+  .hero__link{font-size:.94rem}
+}
+
+/* Узкие экраны: короткая подпись кнопки, чтобы она не разъезжалась */
+@media (max-width:430px){
+  .hero__cta .label-full{display:none}
+  .hero__cta .label-short{display:inline}
+  .hero__brand-name{letter-spacing:.22em}
+  .hero__lead{max-width:32ch}
+}
+
+@media (max-width:340px){
+  .hero{min-height:min(88vh,640px)}
+  .hero__title{font-size:1.8rem}
+  .hero__lead{font-size:.94rem}
+  .hero__cta{padding:14px 16px;font-size:.9rem}
+}
+
+/* ---------- О школе ----------
+   Слева текст и три этапа, справа фотографии, растущие по размеру.
+   Порядок и размер снимков и есть рассказ о развитии ребёнка. */
+.section--about{padding:clamp(84px,10vw,150px) 0}
+
+.about{
+  display:grid;
+  grid-template-columns:minmax(0,42fr) minmax(0,58fr);
+  grid-template-areas:
+    "intro media"
+    "stages media";
+  column-gap:clamp(40px,5vw,88px);
+  row-gap:clamp(32px,4vw,56px);
+  align-items:start;
+}
+.about__intro{grid-area:intro}
+.about__media{grid-area:media}
+.stages{grid-area:stages}
+
+.about__lead{
+  color:var(--ink-70);
+  max-width:38ch;
+  font-size:clamp(1rem,1.1vw,1.08rem);
+  line-height:1.65;
+}
+
+/* ---- Этапы: золотая нить вместо карточек ---- */
+.stages{display:grid;gap:clamp(24px,3vw,34px);margin-top:clamp(28px,3.6vw,44px)}
+.stage{position:relative;display:grid;grid-template-columns:auto 1fr;gap:0 clamp(16px,1.8vw,24px)}
+
+/* Тонкая линия связывает этапы в один путь */
+.stage:not(:last-child)::before{
+  content:"";position:absolute;left:19px;top:42px;bottom:calc(-1 * clamp(24px,3vw,34px));
+  width:1px;
+  background:linear-gradient(180deg,rgba(205,158,85,.55),rgba(205,158,85,.10));
+}
+
+.stage__num{
+  font-family:var(--font-display);
+  font-size:1.5rem;line-height:1;
+  color:var(--gold);
+  width:39px;
+  padding-top:2px;
+}
+.stage__title{font-size:1.2rem;margin:0 0 6px}
+.stage__body p{color:var(--ink-70);font-size:.98rem;line-height:1.6;margin:0}
+.stage__slot:empty{display:none}
+
+/* ---- Фотографии ---- */
+.about__media{
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:clamp(14px,1.6vw,22px);
+}
+.about__ph{
+  margin:0;overflow:hidden;border-radius:var(--r);
+  background:var(--silver);
+}
+.about__ph img{width:100%;height:100%;object-fit:cover;object-position:50% 40%}
+.about__ph--a{aspect-ratio:3/4;object-position:50% 30%}
+.about__ph--a img{object-position:50% 25%}
+.about__ph--b{aspect-ratio:3/4;margin-top:clamp(28px,4.5vw,64px)}
+.about__ph--c{grid-column:1/-1;aspect-ratio:16/9}
+.about__ph--c img{object-position:50% 42%}
+
+/* ---- Заглушка под будущее фото ---- */
+.about__ph--need{
+  background:var(--white);
+  border:1px dashed rgba(44,36,22,.22);
+  display:flex;align-items:center;
+}
+.need{padding:clamp(18px,2vw,26px);width:100%}
+.need__label{
+  font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;font-weight:600;
+  color:var(--gold-dark);margin:0 0 10px;
+}
+.need__title{
+  font-family:var(--font-display);font-size:1.02rem;line-height:1.3;
+  color:var(--ink);margin:0 0 12px;
+}
+.need__list{display:grid;gap:6px}
+.need__list li{
+  position:relative;padding-left:14px;
+  font-size:.82rem;line-height:1.45;color:var(--ink-45);
+}
+.need__list li::before{
+  content:"";position:absolute;left:0;top:7px;width:5px;height:5px;
+  background:var(--gold);transform:rotate(45deg);opacity:.7;
+}
+
+/* ---- Планшет: текст, затем фотографии, затем этапы ---- */
+@media (max-width:1023px){
+  .about{
+    grid-template-columns:1fr;
+    grid-template-areas:
+      "intro"
+      "media"
+      "stages";
+    row-gap:clamp(30px,4vw,44px);
+  }
+  .about__lead{max-width:60ch}
+  .stages{
+    margin-top:0;
+    grid-template-columns:repeat(3,1fr);
+    gap:clamp(20px,3vw,32px);
+  }
+  /* В три колонки нить идёт горизонтально */
+  .stage{grid-template-columns:1fr;gap:10px}
+  .stage:not(:last-child)::before{
+    left:44px;right:calc(-1 * clamp(20px,3vw,32px));top:11px;bottom:auto;
+    width:auto;height:1px;
+    background:linear-gradient(90deg,rgba(205,158,85,.55),rgba(205,158,85,.10));
+  }
+  .stage__num{font-size:1.35rem;width:auto}
+  .about__ph--b{margin-top:clamp(20px,3.5vw,44px)}
+}
+
+/* ---- Мобильный: этап и фотография идут парами ---- */
+@media (max-width:767px){
+  .about{row-gap:clamp(26px,5vw,36px)}
+  .about__media:empty{display:none}
+  .stages{grid-template-columns:1fr;gap:clamp(30px,6vw,40px)}
+  .stage{grid-template-columns:auto 1fr}
+  .stage__slot{grid-column:1/-1;margin-top:16px}
+  .stage:not(:last-child)::before{
+    left:19px;right:auto;top:42px;bottom:calc(-1 * clamp(30px,6vw,40px));
+    width:1px;height:auto;
+    background:linear-gradient(180deg,rgba(205,158,85,.45),rgba(205,158,85,.08));
+  }
+  .stage__num{font-size:1.4rem;width:39px}
+
+  /* Фотографии внутри этапов занимают всю ширину.
+     Пропорции слота подобраны под сами кадры: вертикальные снимки
+     в широком слоте обрезались так, что уходили лица. */
+  .stage__slot .about__ph{margin-top:0;aspect-ratio:4/5}
+  .stage__slot .about__ph--c{aspect-ratio:3/2}   /* горизонтальный кадр */
+  .stage__slot .about__ph--need{aspect-ratio:auto}
+}
+
+@media (max-width:430px){
+  .stage__slot{margin-left:calc(-39px - clamp(16px,1.8vw,24px))}
+  .stage__title{font-size:1.12rem}
+}
+
+/* ---------- Первое занятие ----------
+   Слева крупная фотография во всю высоту текста, справа заголовок,
+   короткое объяснение, три шага и единственная кнопка. */
+.section--trial{padding:clamp(84px,10vw,150px) 0}
+
+.trial{
+  display:grid;
+  grid-template-columns:minmax(0,45fr) minmax(0,55fr);
+  grid-template-areas:
+    "photo intro"
+    "photo body";
+  column-gap:clamp(40px,5vw,84px);
+  row-gap:clamp(28px,3.4vw,40px);
+  align-items:start;
+}
+.trial__intro{grid-area:intro}
+.trial__photo{grid-area:photo;align-self:stretch}
+.trial__body{grid-area:body}
+
+.trial__photo{
+  margin:0;overflow:hidden;border-radius:var(--r);
+  background:var(--silver);
+  min-height:clamp(380px,46vw,620px);
+}
+.trial__photo img{
+  width:100%;height:100%;
+  object-fit:cover;object-position:52% 48%;
+}
+
+.trial__lead{
+  color:var(--ink-70);
+  max-width:44ch;
+  font-size:clamp(1rem,1.1vw,1.08rem);
+  line-height:1.65;
+}
+
+/* ---- Три этапа как одна траектория ----
+   Точки последовательно смещаются вправо, тонкая линия соединяет их
+   в один маршрут: заявка → подбор группы → выход на лёд. */
+.route{
+  --step:clamp(40px,4.6vw,64px);   /* смещение каждой следующей точки */
+  --dot:11px;
+  color:var(--blue);
+  margin:0 0 clamp(30px,4vw,42px);
+}
+
+.route__step{
+  position:relative;
+  padding-left:calc(var(--dot) + 16px);
+  max-width:44ch;
+}
+.route__step--1{margin-left:0}
+.route__step--2{margin-left:var(--step)}
+.route__step--3{margin-left:calc(var(--step) * 2)}
+
+/* Точка маршрута */
+.route__step::before{
+  content:"";position:absolute;left:0;top:7px;
+  width:var(--dot);height:var(--dot);
+  border:1.6px solid var(--blue);border-radius:50%;
+  background:var(--white);
+}
+.route__step--3::before{background:var(--blue)}
+
+.route__title{
+  font-size:1.16rem;margin:0 0 5px;color:var(--ink);
+}
+.route__step p{color:var(--ink-70);font-size:.97rem;line-height:1.6;margin:0}
+
+/* Плавные перемычки между точками */
+.route__link{
+  display:block;
+  height:clamp(30px,3.4vw,42px);
+  width:var(--step);
+  margin:2px 0;
+  opacity:.5;
+}
+.route__link--1{margin-left:calc(var(--dot) / 2)}
+.route__link--2{margin-left:calc(var(--step) + var(--dot) / 2)}
+
+/* Завершение маршрута */
+.route__heart{
+  display:block;
+  width:46px;height:auto;
+  margin:2px 0 0 calc(var(--step) * 2 + var(--dot) / 2 - 23px);
+  opacity:.6;
+}
+
+.trial__cta{padding:16px 34px}
+
+/* ---- Композиция становится тесной: переходим на вертикаль ---- */
+@media (max-width:900px){
+  .trial{
+    grid-template-columns:1fr;
+    grid-template-areas:
+      "intro"
+      "photo"
+      "body";
+    row-gap:clamp(26px,4vw,36px);
+  }
+  .trial__photo{
+    min-height:0;
+    aspect-ratio:3/2;
+  }
+  .trial__photo img{object-position:52% 50%}
+  .trial__lead{max-width:62ch}
+}
+
+@media (max-width:560px){
+  .trial__photo{aspect-ratio:4/3}
+  .route{--step:26px}
+  .route__title{font-size:1.1rem}
+  .route__heart{width:40px}
+  .trial__cta{width:100%;padding:15px 20px}
+}
+
+@media (max-width:430px){
+  .trial__photo{aspect-ratio:5/4}
+  .route{--step:20px;--dot:10px}
+  .route__step{padding-left:24px}
+  .route__link{height:30px}
+}
+
+/* ---------- Команда ----------
+   Директор открывает знакомство крупной горизонтальной карточкой,
+   ниже — три тренера в ряд. Без типовых UI-карточек с тенями:
+   фотография, воздух и тонкие разделители. */
+.section--team{padding:clamp(84px,10vw,150px) 0}
+
+.team__head{max-width:660px;margin-bottom:clamp(36px,4.6vw,64px)}
+.team__lead{color:var(--ink-70);max-width:52ch;font-size:clamp(1rem,1.1vw,1.08rem);line-height:1.65}
+
+.person__role{
+  font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;font-weight:600;
+  color:var(--blue);margin:0 0 16px;line-height:1.45;
+}
+.person__rank{
+  display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+  margin:0 0 16px;padding:12px 0;
+  border-top:1px solid rgba(44,36,22,.12);
+  border-bottom:1px solid rgba(44,36,22,.12);
+}
+.person__rank-abbr{
+  font-family:var(--font-display);font-size:1.3rem;line-height:1;
+  color:var(--gold-dark);letter-spacing:.02em;
+}
+.person__rank-text{font-size:.92rem;color:var(--ink-70);line-height:1.4}
+
+.person__facts{display:grid}
+.person__facts li{
+  padding:9px 0;
+  font-size:.92rem;line-height:1.5;color:var(--ink-70);
+  border-bottom:1px solid rgba(44,36,22,.08);
+}
+.person__facts li:last-child{border-bottom:0;padding-bottom:0}
+
+.lead-card{
+  display:grid;grid-template-columns:52fr 48fr;
+  background:var(--white);border-radius:var(--r);overflow:hidden;
+  margin-bottom:clamp(36px,4.6vw,64px);
+}
+.lead-card__photo{
+  margin:0;position:relative;overflow:hidden;
+  background:var(--silver);
+  min-height:clamp(340px,34vw,520px);
+}
+.lead-card__photo img{width:100%;height:100%;object-fit:cover;object-position:50% 12%}
+.lead-card__info{
+  display:flex;flex-direction:column;justify-content:center;
+  padding:clamp(26px,3.2vw,48px);
+}
+.lead-card__name{font-size:clamp(1.4rem,2vw,1.9rem);line-height:1.15;margin:0 0 10px}
+.person__rank--lead .person__rank-abbr{font-size:1.5rem}
+
+.team__grid{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:clamp(24px,3vw,44px);align-items:start;
+}
+.person{display:flex;flex-direction:column}
+.person__photo{
+  position:relative;margin:0 0 20px;overflow:hidden;border-radius:var(--r);
+  background:var(--silver);aspect-ratio:4/5;
+}
+.person__photo img{
+  width:100%;height:100%;object-fit:cover;object-position:50% 25%;
+  transition:transform .8s var(--ease);
+}
+.person:hover .person__photo img{transform:scale(1.03)}
+.person__name{font-size:1.24rem;line-height:1.2;margin:0 0 8px}
+
+/* Хореограф ждёт данных и на сайте не показывается */
+.person--pending{display:none}
+
+/* Заглушка будущей фотографии */
+.photo-need{
+  position:absolute;inset:0;
+  display:flex;align-items:center;
+  background:var(--white);
+  border:1px dashed rgba(44,36,22,.22);
+  border-radius:var(--r);
+}
+
+@media (max-width:1023px){
+  .team__grid{grid-template-columns:repeat(2,1fr)}
+}
+@media (max-width:900px){
+  .lead-card{grid-template-columns:1fr}
+  .lead-card__photo{min-height:0;aspect-ratio:4/3}
+  .lead-card__photo img{object-position:50% 14%}
+  .lead-card__info{padding:clamp(24px,4vw,34px)}
+}
+@media (max-width:640px){
+  .team__grid{grid-template-columns:1fr;gap:clamp(40px,9vw,56px)}
+  .person__photo{aspect-ratio:1/1}
+  .lead-card__photo{aspect-ratio:1/1}
+  .person__name{font-size:1.18rem}
+}
+@media (max-width:430px){
+  .person__rank-abbr{font-size:1.2rem}
+  .person__role{font-size:.75rem}
+}
+
+/* ---------- Специальные предложения ----------
+   Смена ритма после фотографического блока «Команда»:
+   тёмное полотно, крупная типографика, никаких картинок.
+   Три предложения различаются масштабом и линиями, а не цветом плашек. */
+.section--offers{
+  background:var(--deep);color:#fff;
+  padding:clamp(64px,7.5vw,112px) 0;
+}
+.offers__head{max-width:640px;margin-bottom:clamp(32px,4vw,54px)}
+
+.offers{
+  display:grid;
+  grid-template-columns:minmax(0,57fr) minmax(0,43fr);
+  gap:clamp(24px,3vw,48px);
+}
+
+.offer{display:flex;flex-direction:column;min-width:0}
+
+/* Главное предложение: единственная приподнятая поверхность */
+.offer--main{
+  grid-row:span 2;justify-content:center;
+  background:rgba(255,255,255,.045);
+  border-radius:var(--r);
+  padding:clamp(30px,3.6vw,58px);
+}
+.offer--family{padding:clamp(4px,1vw,12px) 0 clamp(22px,2.6vw,30px)}
+.offer--boys{
+  padding-top:clamp(24px,2.8vw,34px);
+  border-top:1px solid rgba(255,255,255,.14);
+}
+
+/* Мелкие подписи над акцентом */
+.offer__title,.offer__label{
+  font-size:.76rem;letter-spacing:.2em;text-transform:uppercase;font-weight:600;
+  color:rgba(255,255,255,.58);
+  margin:0 0 14px;
+}
+.offer--boys .offer__title{
+  font-family:var(--font-display);font-weight:400;
+  font-size:clamp(1.45rem,2.2vw,1.95rem);
+  letter-spacing:.01em;text-transform:none;
+  color:#fff;margin-bottom:18px;
+}
+
+/* Крупные значения */
+.offer__big{
+  font-family:var(--font-display);line-height:1;letter-spacing:-.01em;
+  overflow-wrap:normal;hyphens:none;
+}
+.offer--main .offer__big{
+  display:block;
+  font-size:clamp(2.6rem,5.6vw,4.4rem);
+  margin:0 0 clamp(16px,2vw,24px);
+}
+.offer__big--gold{color:var(--gold)}
+
+.offer__headline{display:flex;flex-direction:column;gap:8px;margin:0 0 16px;font-weight:400}
+.offer__headline .offer__big{font-size:clamp(2.1rem,4.2vw,3rem);color:#fff}
+.offer__headline-text{
+  font-family:var(--font-text);font-size:.98rem;line-height:1.4;
+  letter-spacing:0;color:rgba(255,255,255,.82);
+}
+
+.offer__text{
+  color:rgba(255,255,255,.64);font-size:.95rem;line-height:1.6;
+  margin:0;max-width:46ch;
+}
+.offer--main .offer__text{
+  color:rgba(255,255,255,.78);
+  font-size:clamp(1rem,1.1vw,1.08rem);max-width:38ch;
+}
+.offer__cta{align-self:flex-start;margin-top:clamp(24px,3vw,36px);padding:15px 34px}
+
+/* Четыре слова с нарастающими штрихами — мотив разгона */
+.offer__words{display:flex;flex-direction:column;gap:9px;margin:0 0 20px}
+.offer__words span{
+  display:flex;align-items:center;gap:13px;
+  font-family:var(--font-display);
+  font-size:clamp(1.02rem,1.35vw,1.2rem);
+  color:#fff;
+}
+.offer__words span::before{
+  content:"";height:1px;width:10px;background:var(--blue);flex:0 0 auto;
+}
+.offer__words span:nth-child(2)::before{width:20px}
+.offer__words span:nth-child(3)::before{width:30px}
+.offer__words span:nth-child(4)::before{width:40px}
+
+/* Правая колонка становится тесной — главное предложение уходит на всю ширину */
+@media (max-width:1023px){
+  .offers{grid-template-columns:1fr 1fr;gap:clamp(22px,3vw,36px)}
+  .offer--main{grid-column:1/-1;grid-row:auto}
+  .offer--family{padding-bottom:0}
+  .offer--boys{
+    border-top:0;padding-top:0;
+    border-left:1px solid rgba(255,255,255,.14);
+    padding-left:clamp(20px,3vw,34px);
+  }
+}
+
+/* Узкий экран: предложения идут подряд, разделённые волосяной линией */
+@media (max-width:680px){
+  .offers{grid-template-columns:1fr;gap:0}
+  .offer--family,.offer--boys{
+    margin-top:clamp(28px,6vw,38px);
+    padding:clamp(28px,6vw,38px) 0 0;
+    border-top:1px solid rgba(255,255,255,.14);
+    border-left:0;
+  }
+  .offer__cta{width:100%;text-align:center}
+}
+
+@media (max-width:380px){
+  .offer--main .offer__big{font-size:2.4rem}
+  .offer__headline .offer__big{font-size:2rem}
+}
+
+/* ---------- Группы и абонементы ----------
+   Три смысловых раздела, внутри — карточки с аккордеоном:
+   расписание и запись раскрываются прямо в карточке. */
+.section--groups{padding:clamp(76px,9vw,132px) 0}
+
+.groups__head{max-width:680px;margin-bottom:clamp(36px,4.4vw,60px)}
+.groups__lead{color:var(--ink-70);max-width:60ch;font-size:clamp(1rem,1.1vw,1.06rem);line-height:1.65}
+
+/* ---- Смысловой раздел ---- */
+.gset{margin-bottom:clamp(40px,5vw,72px)}
+.gset__head{
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 24px;
+  padding-top:18px;margin-bottom:clamp(20px,2.4vw,28px);
+  border-top:1px solid var(--ink-12);
+}
+.gset__title{
+  font-size:clamp(1.25rem,1.8vw,1.6rem);margin:0;
+  color:var(--ink);
+}
+.gset__note{color:var(--ink-45);font-size:.94rem;line-height:1.5;max-width:56ch;margin:0}
+
+.gset__grid{display:grid;gap:clamp(16px,1.8vw,24px);align-items:start}
+.gset__grid--2{grid-template-columns:repeat(2,1fr)}
+.gset__grid--3{grid-template-columns:repeat(3,1fr)}
+
+/* ---- Карточка группы ---- */
+.gcard{
+  display:flex;flex-direction:column;
+  padding:clamp(22px,2.4vw,30px);
+  border:1px solid var(--ink-12);
+  border-radius:var(--r);
+  background:var(--white);
+  transition:border-color .35s var(--ease);
+}
+.gcard:hover{border-color:rgba(44,36,22,.24)}
+.gcard--accent{background:var(--sand);border-color:transparent}
+.gcard.is-open{border-color:rgba(0,149,186,.35)}
+
+.gcard__age{
+  font-size:.74rem;letter-spacing:.16em;text-transform:uppercase;font-weight:600;
+  color:var(--blue);margin:0 0 12px;
+}
+.gcard__mark{
+  font-size:.74rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--gold-dark);margin:-6px 0 12px;
+}
+.gcard__name{
+  font-family:var(--font-display);font-weight:400;
+  font-size:clamp(1.3rem,1.7vw,1.55rem);line-height:1.15;
+  margin:0 0 4px;
+}
+.gcard__full{color:var(--ink-45);font-size:.86rem;line-height:1.4;margin:0 0 18px}
+
+.gcard__price{
+  font-family:var(--font-display);font-size:clamp(1.5rem,2vw,1.8rem);
+  line-height:1.1;color:var(--gold-dark);
+  margin:0 0 18px;
+}
+.gcard__per{
+  display:block;font-family:var(--font-text);
+  font-size:.78rem;letter-spacing:.08em;color:var(--ink-45);margin-top:5px;
+}
+
+.gcard__facts{display:grid;gap:8px;margin:0 0 16px}
+.gcard__facts li{
+  position:relative;padding-left:16px;
+  font-size:.93rem;line-height:1.5;color:var(--ink-70);
+}
+.gcard__facts li::before{
+  content:"";position:absolute;left:0;top:8px;width:5px;height:5px;
+  background:var(--gold);transform:rotate(45deg);
+}
+.gcard__desc{color:var(--ink-45);font-size:.9rem;line-height:1.55;margin:0 0 20px}
+.gcard__toggle{margin-top:auto}
+
+/* ---- Кнопка раскрытия ---- */
+.gcard__toggle{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  width:100%;padding:13px 0 0;
+  background:none;border:0;border-top:1px solid var(--ink-12);
+  cursor:pointer;text-align:left;
+  font-size:.92rem;font-weight:600;color:var(--ink);
+  transition:color .3s var(--ease);
+}
+.gcard__toggle:hover{color:var(--blue)}
+.gcard__icon{position:relative;flex:0 0 auto;width:14px;height:14px}
+.gcard__icon::before,.gcard__icon::after{
+  content:"";position:absolute;left:0;top:6.5px;width:14px;height:1.5px;
+  background:var(--gold-dark);
+  transition:transform .35s var(--ease),opacity .35s var(--ease);
+}
+.gcard__icon::after{transform:rotate(90deg)}
+.gcard__toggle[aria-expanded="true"] .gcard__icon::after{transform:rotate(0);opacity:0}
+
+/* ---- Раскрываемая часть ---- */
+.gcard__panel{overflow:hidden}
+.gcard__panel-inner{padding-top:20px}
+.gcard__sub{
+  font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;font-weight:600;
+  color:var(--ink-45);margin:0 0 10px;
+}
+
+.gsched{display:grid;gap:0;margin:0 0 20px}
+.gsched li{
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;
+  padding:10px 0;
+  border-bottom:1px solid rgba(44,36,22,.08);
+}
+.gsched li:last-child{border-bottom:0}
+.gsched__day{
+  flex:0 0 30px;
+  font-size:.74rem;font-weight:600;letter-spacing:.12em;
+  color:var(--gold-dark);
+}
+.gsched__slots{display:flex;flex-wrap:wrap;gap:4px 18px}
+.gsched__slot{font-size:.9rem;color:var(--ink-45)}
+.gsched__slot b{font-weight:600;color:var(--ink);margin-right:5px}
+
+.gcard__close{
+  display:block;margin:14px auto 0;padding:4px;
+  background:none;border:0;cursor:pointer;
+  font-size:.86rem;color:var(--ink-45);
+  border-bottom:1px solid transparent;
+  transition:color .3s var(--ease),border-color .3s var(--ease);
+}
+.gcard__close:hover{color:var(--blue);border-color:var(--blue)}
+
+/* ---- Завершающий призыв ---- */
+.groups__cta{
+  display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;
+  gap:22px 40px;
+  padding:clamp(26px,3.2vw,40px);
+  background:var(--sand);border-radius:var(--r);
+  border-left:3px solid var(--gold);
+}
+.groups__cta .h3{margin-bottom:.35em}
+.groups__cta p{color:var(--ink-70);font-size:.97rem;max-width:56ch;margin:0}
+.groups__cta .btn{flex:0 0 auto}
+
+/* ---- Адаптив ---- */
+@media (max-width:1080px){
+  .gset__grid--3{grid-template-columns:repeat(2,1fr)}
+}
+
+@media (max-width:680px){
+  .gset__grid--2,.gset__grid--3{grid-template-columns:1fr}
+  .gset{margin-bottom:clamp(34px,7vw,48px)}
+  .groups__cta{flex-direction:column;align-items:flex-start}
+  .groups__cta .btn{width:100%;text-align:center}
+}
+
+@media (max-width:380px){
+  .gcard{padding:20px 18px}
+  .gsched__slots{gap:2px 12px}
+}
+
+/* ---------- Жизнь школы ----------
+   Асимметричный коллаж: крупный кадр слева, три меньших справа.
+   Снимки в плитках сменяются по очереди, растворяясь друг в друга. */
+.section--life{padding:clamp(76px,9vw,132px) 0}
+.life__head{max-width:620px;margin-bottom:clamp(30px,3.6vw,48px)}
+.life__lead{color:var(--ink-70);font-size:clamp(1rem,1.1vw,1.06rem);max-width:46ch}
+
+.life{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  grid-template-rows:1fr 1fr;
+  gap:clamp(10px,1.2vw,18px);
+  /* ячейки чуть выше квадрата: широкая плитка получается 1.85:1,
+     это ближе к пропорциям съёмки 3:2 и обрезает кадр мягче */
+  aspect-ratio:1.85/1;
+}
+.tile--big{grid-column:1/3;grid-row:1/3}
+.tile--s1{grid-column:3;grid-row:1}
+.tile--s2{grid-column:4;grid-row:1}
+.tile--s3{grid-column:3/5;grid-row:2}
+
+.tile{
+  position:relative;margin:0;overflow:hidden;
+  border-radius:var(--r);
+  background:var(--silver);
+  cursor:zoom-in;
+  min-width:0;min-height:0;
+}
+.tile img{
+  position:absolute;inset:0;
+  width:100%;height:100%;object-fit:cover;object-position:50% 40%;
+  opacity:1;
+  transition:opacity 1.1s var(--ease);
+}
+/* Входящий кадр появляется поверх уходящего */
+.tile img.is-entering{opacity:0}
+.tile:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
+
+/* ---------- Полноэкранный просмотр ---------- */
+.viewer{
+  width:min(1200px,calc(100vw - 24px));
+  max-height:calc(100vh - 40px);
+  padding:0;border:0;background:transparent;overflow:visible;
+}
+.viewer::backdrop{background:rgba(15,28,36,.9)}
+.viewer__img{
+  display:block;width:100%;height:auto;
+  max-height:calc(100vh - 40px);object-fit:contain;
+  border-radius:var(--r);
+}
+.viewer__close,.viewer__nav{
+  position:absolute;z-index:2;
+  width:44px;height:44px;
+  border:0;border-radius:50%;
+  background:rgba(255,255,255,.14);
+  backdrop-filter:blur(6px);
+  cursor:pointer;
+  transition:background-color .3s var(--ease);
+}
+.viewer__close:hover,.viewer__nav:hover{background:rgba(255,255,255,.26)}
+.viewer__close{top:-54px;right:0}
+.viewer__close::before,.viewer__close::after{
+  content:"";position:absolute;top:50%;left:50%;
+  width:15px;height:1.5px;background:#fff;
+}
+.viewer__close::before{transform:translate(-50%,-50%) rotate(45deg)}
+.viewer__close::after{transform:translate(-50%,-50%) rotate(-45deg)}
+
+.viewer__nav{top:50%;transform:translateY(-50%)}
+.viewer__nav--prev{left:-56px}
+.viewer__nav--next{right:-56px}
+.viewer__nav::before{
+  content:"";position:absolute;top:50%;left:50%;
+  width:10px;height:10px;
+  border-top:1.6px solid #fff;border-right:1.6px solid #fff;
+}
+.viewer__nav--next::before{transform:translate(-65%,-50%) rotate(45deg)}
+.viewer__nav--prev::before{transform:translate(-35%,-50%) rotate(-135deg)}
+
+.viewer__count{
+  position:absolute;left:50%;bottom:-38px;transform:translateX(-50%);
+  margin:0;font-size:.82rem;letter-spacing:.12em;
+  color:rgba(255,255,255,.7);white-space:nowrap;
+}
+
+/* Стрелки не помещаются по бокам — уводим их внутрь кадра */
+@media (max-width:1340px){
+  .viewer__nav--prev{left:12px}
+  .viewer__nav--next{right:12px}
+}
+
+/* ---------- Планшет ---------- */
+@media (max-width:1023px){
+  .life{aspect-ratio:16/9}
+}
+
+/* ---------- Узкий экран: крупный кадр и два меньших ---------- */
+@media (max-width:700px){
+  .life{
+    grid-template-columns:1fr 1fr;
+    grid-template-rows:auto auto;
+    aspect-ratio:auto;
+  }
+  .tile--big{grid-column:1/3;grid-row:1;aspect-ratio:4/3}
+  .tile--s1{grid-column:1;grid-row:2;aspect-ratio:1/1}
+  .tile--s2{grid-column:2;grid-row:2;aspect-ratio:1/1}
+  .tile--s3{display:none}   /* четвёртая плитка скрыта, скрипт её пропускает */
+
+  .viewer__close{top:-48px;width:40px;height:40px}
+  .viewer__nav{width:40px;height:40px}
+  .viewer__count{bottom:-32px}
+}
+
+/* ---------- Вопросы и ответы ----------
+   После фотографической «Жизни школы» — пространство и типографика.
+   Слева заголовок, справа один вертикальный список вопросов,
+   разделённых волосяными линиями. Никаких карточек. */
+.section--faq{padding:clamp(76px,9vw,132px) 0}
+
+.faq{
+  display:grid;grid-template-columns:minmax(0,32fr) minmax(0,68fr);
+  gap:clamp(32px,5vw,90px);
+  align-items:start;
+}
+.faq__head{position:sticky;top:110px}
+
+.faq__body{display:grid;gap:clamp(40px,5vw,64px)}
+
+/* Навигационные подзаголовки групп — в системе eyebrow */
+.faq__group-title{
+  font-family:var(--font-text);font-weight:600;
+  font-size:.74rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--gold-dark);
+  margin:0 0 6px;
+}
+
+.faq__list{border-top:1px solid var(--ink-12)}
+.acc{border-bottom:1px solid var(--ink-12)}
+
+.acc__btn{
+  width:100%;background:none;border:0;cursor:pointer;text-align:left;
+  display:flex;align-items:flex-start;justify-content:space-between;
+  gap:clamp(16px,2.6vw,36px);
+  padding:20px 0;
+  font-family:var(--font-display);font-weight:400;
+  font-size:clamp(1.02rem,1.5vw,1.18rem);
+  line-height:1.35;
+  color:var(--ink);
+  transition:color .3s var(--ease);
+}
+.acc__btn:hover{color:var(--blue)}
+.acc__q{flex:1 1 auto;min-width:0}
+
+/* Плюс превращается в минус: только две линии, без фонов и кружков */
+.acc__icon{position:relative;flex:0 0 auto;width:15px;height:15px;margin-top:5px}
+.acc__icon::before,.acc__icon::after{
+  content:"";position:absolute;left:0;top:7px;width:15px;height:1.5px;
+  background:var(--gold-dark);
+  transition:transform .3s var(--ease),opacity .3s var(--ease);
+}
+.acc__icon::after{transform:rotate(90deg)}
+.acc__btn[aria-expanded="true"] .acc__icon::after{transform:rotate(0);opacity:0}
+.acc__btn[aria-expanded="true"]{color:var(--blue)}
+
+.acc__panel{overflow:hidden}
+.acc__panel p{
+  padding:0 clamp(16px,4vw,52px) 22px 0;
+  margin:0;
+  color:var(--ink-70);
+  font-size:.97rem;line-height:1.65;
+  max-width:64ch;
+}
+.faq__link{
+  color:var(--blue);
+  border-bottom:1px solid rgba(0,149,186,.35);
+  transition:border-color .3s var(--ease);
+}
+.faq__link:hover{border-bottom-color:var(--blue)}
+
+/* ---- Планшет: заголовок над списком, без залипания ---- */
+@media (max-width:1023px){
+  .faq{grid-template-columns:1fr;gap:clamp(28px,4vw,40px)}
+  .faq__head{position:static}
+}
+
+@media (max-width:560px){
+  .acc__btn{padding:18px 0;gap:14px;font-size:1.02rem}
+  .acc__panel p{padding-right:0;font-size:.95rem}
+  .faq__body{gap:36px}
+}
+
+/* ---------- Запись на пробное занятие ----------
+   Финальный блок страницы: слева крупный кадр, справа короткая форма.
+   Фотография и форма стоят рядом, поля не лежат поверх изображения. */
+.section--lead{padding:clamp(80px,9.5vw,140px) 0;background:var(--white)}
+
+.lead{
+  display:grid;
+  grid-template-columns:minmax(0,45fr) minmax(0,55fr);
+  grid-template-areas:
+    "photo intro"
+    "photo form";
+  column-gap:clamp(36px,4.6vw,80px);
+  row-gap:clamp(26px,3vw,38px);
+  align-items:start;
+}
+.lead__intro{grid-area:intro}
+.lead__photo{grid-area:photo;align-self:stretch}
+.lead__box{grid-area:form}
+
+.lead__sub{
+  color:var(--ink-70);max-width:46ch;
+  font-size:clamp(1rem,1.1vw,1.08rem);line-height:1.65;
+}
+
+.lead__photo{
+  margin:0;position:relative;overflow:hidden;
+  border-radius:var(--r);
+  min-height:clamp(360px,42vw,620px);
+  display:flex;align-items:center;
+  /* рамка и фон — оформление заглушки, убираются вместе с ней */
+  border:1px dashed rgba(44,36,22,.22);
+  background:var(--sand);
+}
+.lead__photo img{
+  width:100%;height:100%;object-fit:cover;object-position:50% 32%;
+}
+
+/* Выбранная группа */
+.chosen{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  margin:0 0 22px;padding:12px 16px;
+  background:var(--silver);border-radius:var(--r);
+  font-size:.92rem;color:var(--ink-70);
+}
+.chosen strong{font-weight:600;color:var(--ink)}
+.chosen__reset{
+  flex:0 0 auto;cursor:pointer;padding:2px 0;
+  font-size:.86rem;color:var(--blue);white-space:nowrap;
+  border-bottom:1px solid rgba(0,149,186,.35);
+  transition:border-color .3s var(--ease),color .3s var(--ease);
+}
+.chosen__reset:hover{border-bottom-color:var(--blue)}
+
+/* Поля */
+.form{display:grid;gap:18px}
+.field{display:grid;gap:7px}
+.field-row{display:grid;grid-template-columns:1fr 150px;gap:14px}
+.field__label{
+  font-size:.82rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-45);
+}
+.field__optional{
+  margin-left:6px;font-weight:400;letter-spacing:.02em;text-transform:none;
+  color:rgba(44,36,22,.35);
+}
+.field__input{
+  width:100%;padding:14px 15px;
+  border:1px solid var(--ink-12);border-radius:var(--r);
+  background:var(--white);color:var(--ink);
+  font:inherit;font-size:1rem;
+  transition:border-color .3s var(--ease),box-shadow .3s var(--ease),background-color .3s var(--ease);
+}
+.field__input--area{resize:vertical;min-height:88px;line-height:1.5}
+.field__input::placeholder{color:rgba(44,36,22,.32)}
+.field__input:hover{border-color:rgba(44,36,22,.28)}
+.field__input:focus{
+  outline:none;border-color:var(--blue);
+  box-shadow:0 0 0 3px rgba(0,149,186,.14);
+}
+/* Ошибку показывает не только цвет, но и текст рядом с полем */
+.field__error{margin:0;font-size:.82rem;color:#B3402F}
+.field.has-error .field__input{border-color:#B3402F;background:#FDF6F4}
+
+.field-trap{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+
+/* Согласие на обработку данных */
+.field--check{gap:0}
+.check{
+  display:flex;gap:12px;align-items:flex-start;cursor:pointer;
+  font-size:.88rem;line-height:1.5;color:var(--ink-70);
+}
+.check input{position:absolute;opacity:0;width:0;height:0}
+.check__box{
+  flex:0 0 auto;width:20px;height:20px;margin-top:1px;
+  border:1px solid var(--ink-12);border-radius:3px;background:var(--white);
+  display:grid;place-items:center;
+  transition:background-color .25s var(--ease),border-color .25s var(--ease);
+}
+.check__box::after{
+  content:"";width:9px;height:5px;
+  border-left:1.8px solid #fff;border-bottom:1.8px solid #fff;
+  transform:rotate(-45deg) scale(.4);opacity:0;
+  transition:opacity .2s var(--ease),transform .2s var(--ease);
+}
+.check input:checked + .check__box{background:var(--blue);border-color:var(--blue)}
+.check input:checked + .check__box::after{opacity:1;transform:rotate(-45deg) scale(1)}
+.check input:focus-visible + .check__box{outline:2px solid var(--blue);outline-offset:3px}
+.check__text a{
+  color:var(--ink);border-bottom:1px solid var(--ink-12);
+  transition:color .3s var(--ease),border-color .3s var(--ease);
+}
+.check__text a:hover{color:var(--blue);border-bottom-color:var(--blue)}
+.field--check.has-error .check__box{border-color:#B3402F;background:#FDF6F4}
+.field--check .field__error{margin-top:8px}
+
+/* Юридические страницы */
+.legal{max-width:760px;margin:0 auto;padding:clamp(120px,14vw,170px) var(--gap) clamp(56px,8vw,92px)}
+.legal h1{font-size:clamp(1.8rem,3.6vw,2.6rem);margin:0 0 .7em}
+.legal h2{font-size:clamp(1.15rem,1.9vw,1.4rem);margin:1.9em 0 .6em}
+.legal p,.legal li{color:var(--ink-70);line-height:1.7}
+.legal p{margin:0 0 1em}
+.legal ul{list-style:disc;padding-left:1.2em;display:grid;gap:8px;margin:0 0 1.2em}
+.legal strong{color:var(--ink);font-weight:600}
+.legal a{color:var(--blue);border-bottom:1px solid rgba(0,149,186,.35)}
+.legal a:hover{border-bottom-color:var(--blue)}
+.legal__req{
+  background:var(--sand);border-left:3px solid var(--gold);
+  padding:18px 20px;border-radius:var(--r);margin:0 0 1.4em;
+}
+.legal__req p{margin:0;color:var(--ink)}
+.legal__date{font-size:.92rem;color:var(--ink-45)}
+.legal__back{display:inline-block;margin-top:36px}
+
+.lead__cta{margin-top:6px;padding:16px 34px;justify-self:start}
+.btn:disabled{opacity:.6;cursor:default;transform:none;box-shadow:none}
+
+.form__note{
+  font-size:.84rem;color:var(--ink-45);margin:0;line-height:1.5;
+}
+.form__note a{
+  color:var(--ink-70);border-bottom:1px solid var(--ink-12);
+  transition:color .3s var(--ease),border-color .3s var(--ease);
+}
+.form__note a:hover{color:var(--blue);border-bottom-color:var(--blue)}
+
+.form__fail{
+  margin:0;padding:12px 14px;
+  background:#FDF6F4;border-left:2px solid #B3402F;border-radius:var(--r);
+  color:#8E3123;font-size:.9rem;
+}
+
+/* Успешная отправка занимает место формы, чтобы блок не «прыгал» */
+.form-success{
+  display:flex;flex-direction:column;align-items:flex-start;
+  justify-content:center;
+  min-height:clamp(260px,26vw,340px);
+  padding:8px 0;
+}
+.form-success .h3{margin:0 0 10px}
+.form-success p{color:var(--ink-70);font-size:.98rem;max-width:44ch;margin:0}
+.form-success__mark{
+  display:block;width:20px;height:20px;margin:0 0 20px;
+  background:var(--gold);transform:rotate(45deg);
+}
+.form-success .btn--link{margin-top:18px;padding-left:0}
+
+/* ---- Планшет: форме нужна ширина ---- */
+@media (max-width:960px){
+  .lead{
+    grid-template-columns:1fr;
+    grid-template-areas:
+      "intro"
+      "photo"
+      "form";
+    row-gap:clamp(24px,4vw,34px);
+  }
+  .lead__photo{min-height:0;aspect-ratio:4/3}
+  /* кадр вертикальный: в широком слоте центр приходится на пояс,
+     поднимаем область, чтобы в кадре остались оба лица */
+  .lead__photo img{object-position:50% 20%}
+  .lead__sub{max-width:60ch}
+}
+
+@media (max-width:560px){
+  .lead__photo{aspect-ratio:5/4}
+  .field-row{grid-template-columns:1fr}
+  .lead__cta{width:100%;justify-self:stretch}
+  .form-success{min-height:220px}
+}
+
+/* ---------- Футер ----------
+   Финальная точка страницы: тёмное поле, три смысловые зоны
+   и спокойная нижняя строка. Без повторов контента лендинга. */
+.footer{
+  background:var(--deep-2);
+  color:rgba(255,255,255,.74);
+  padding-top:clamp(52px,6vw,84px);
+}
+
+.footer__inner{
+  display:grid;
+  grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr);
+  gap:clamp(30px,4vw,64px);
+  padding-bottom:clamp(36px,4.4vw,56px);
+}
+
+/* ---- Бренд ---- */
+.footer__brand{max-width:34ch}
+.footer__logo{
+  display:inline-flex;align-items:center;gap:14px;
+  margin-bottom:18px;
+}
+.footer__logo img{width:56px;height:auto}
+.footer__name{
+  font-family:var(--font-display);font-size:1.3rem;color:#fff;
+  transition:color .3s var(--ease);
+}
+.footer__logo:hover .footer__name{color:var(--gold)}
+
+.footer__about{font-size:.95rem;line-height:1.6;margin:0 0 14px}
+.footer__claim{
+  font-family:var(--font-display);font-size:1.08rem;line-height:1.4;
+  color:rgba(255,255,255,.9);margin:0;
+}
+
+/* ---- Заголовки колонок ---- */
+.footer__title{
+  font-family:var(--font-text);font-size:.72rem;font-weight:600;
+  letter-spacing:.2em;text-transform:uppercase;
+  color:var(--gold);margin:0 0 16px;
+}
+
+/* ---- Контакты ---- */
+.footer__phone{
+  display:inline-block;
+  font-size:1.18rem;font-weight:600;color:#fff;
+  margin-bottom:14px;padding:2px 0;
+  border-bottom:1px solid transparent;
+  transition:border-color .3s var(--ease);
+}
+.footer__phone:hover,.footer__phone:focus-visible{border-bottom-color:var(--gold)}
+
+.footer__address{
+  font-style:normal;font-size:.95rem;line-height:1.6;
+  margin:0 0 20px;
+}
+
+.socials{display:flex;gap:12px}
+.social{
+  display:grid;place-items:center;
+  width:42px;height:42px;
+  border:1px solid rgba(255,255,255,.2);border-radius:50%;
+  color:rgba(255,255,255,.8);
+  transition:color .3s var(--ease),border-color .3s var(--ease),background-color .3s var(--ease);
+}
+.social:hover,.social:focus-visible{
+  color:var(--gold);border-color:var(--gold);
+  background:rgba(205,158,85,.1);
+}
+.social__icon{display:block;width:21px;height:21px}
+/* Подпись остаётся для скринридеров */
+.social__text{position:absolute;left:-9999px}
+
+/* ---- Навигация ---- */
+.footer__nav{display:grid;gap:2px;margin-bottom:20px}
+.footer__link{
+  display:inline-block;padding:6px 0;
+  font-size:.95rem;color:rgba(255,255,255,.74);
+  border-bottom:1px solid transparent;
+  transition:color .3s var(--ease),border-color .3s var(--ease);
+}
+.footer__link:hover,.footer__link:focus-visible{color:#fff;border-bottom-color:var(--gold)}
+
+.footer__lead-link{
+  display:inline-block;
+  font-size:.95rem;color:#fff;
+  padding-bottom:3px;
+  border-bottom:1px solid rgba(205,158,85,.6);
+  transition:border-color .3s var(--ease),color .3s var(--ease);
+}
+.footer__lead-link:hover,.footer__lead-link:focus-visible{color:var(--gold);border-bottom-color:var(--gold)}
+
+/* ---- Нижняя строка ---- */
+.footer__bottom{
+  display:flex;flex-wrap:wrap;gap:10px 28px;
+  justify-content:space-between;align-items:center;
+  padding-top:20px;padding-bottom:26px;
+  border-top:1px solid rgba(255,255,255,.12);
+  font-size:.85rem;color:rgba(255,255,255,.55);
+}
+.footer__bottom p{margin:0}
+.footer__legals{display:flex;flex-wrap:wrap;gap:8px 22px}
+.footer__legal{
+  color:rgba(255,255,255,.62);
+  border-bottom:1px solid rgba(255,255,255,.18);
+  transition:color .3s var(--ease),border-color .3s var(--ease);
+}
+.footer__legal:hover,.footer__legal:focus-visible{color:#fff;border-bottom-color:var(--gold)}
+
+/* ---- Планшет: бренд сверху, две колонки под ним ---- */
+@media (max-width:900px){
+  .footer__inner{
+    grid-template-columns:1fr 1fr;
+    gap:clamp(26px,4vw,40px);
+  }
+  .footer__brand{grid-column:1/-1;max-width:52ch}
+}
+
+/* ---- Мобильный: контакты выше навигации ---- */
+@media (max-width:640px){
+  .footer{padding-top:clamp(40px,9vw,56px)}
+  .footer__inner{grid-template-columns:1fr;gap:32px}
+  .footer__brand{grid-column:auto}
+  .footer__logo img{width:48px}
+  .footer__bottom{justify-content:flex-start;gap:8px 20px}
+}
+
+/* ---------- Кнопка возврата к началу ----------
+   Только для узких экранов: на десктопе шапка и так всегда под рукой. */
+.totop{
+  position:fixed;right:16px;bottom:16px;z-index:90;
+  display:none;
+  width:44px;height:44px;
+  border:1px solid var(--ink-12);border-radius:50%;
+  background:rgba(255,255,255,.94);
+  backdrop-filter:blur(8px);
+  box-shadow:0 8px 22px rgba(15,28,36,.16);
+  cursor:pointer;
+  opacity:0;visibility:hidden;transform:translateY(8px);
+  transition:opacity .3s var(--ease),visibility .3s var(--ease),
+             transform .3s var(--ease),border-color .3s var(--ease);
+}
+.totop::before{
+  content:"";position:absolute;top:52%;left:50%;
+  width:9px;height:9px;
+  border-top:1.5px solid var(--ink);border-right:1.5px solid var(--ink);
+  transform:translate(-50%,-50%) rotate(-45deg);
+  transition:border-color .3s var(--ease);
+}
+.totop.is-visible{opacity:1;visibility:visible;transform:none}
+.totop:hover{border-color:var(--blue)}
+.totop:hover::before{border-color:var(--blue)}
+.totop:active{transform:translateY(1px)}
+
+@media (max-width:767px){
+  .totop{display:block}
+}
+
+/* ---------- Появление при прокрутке ---------- */
+.reveal{opacity:0;transform:translateY(22px);transition:opacity .8s var(--ease),transform .8s var(--ease)}
+.reveal.is-visible{opacity:1;transform:none}
+.parallax{overflow:hidden}
+.parallax img{will-change:transform;transform:scale(1.08);transform-origin:center}
+
+/* ---------- Адаптив ---------- */
+
+/* FAQ показываем, только когда ширины хватает на все пункты */
+@media (min-width:1024px) and (max-width:1160px){
+  .nav__item--faq{display:none}
+  .nav{gap:22px}
+  .nav__list{gap:16px}
+  .nav__link{font-size:.9rem}
+}
+
+/* Планшет и меньше: мозаика фотографий, компактный футер */
+@media (max-width:1023px){
+}
+
+@media (max-width:980px){
+}
+
+/* ---- Планшет: логотип, кнопка, бургер. Ссылки и телефон — внутри меню ---- */
+@media (max-width:1023px){
+  .burger{display:block}
+  .header__cta{
+    display:inline-flex;
+    transition:opacity .25s var(--ease),visibility .25s var(--ease);
+  }
+
+  .nav{
+    position:fixed;inset:0 0 auto 0;
+    flex-direction:column;align-items:flex-start;gap:0;
+    background:var(--white);
+    padding:92px var(--gap) 30px;
+    box-shadow:0 20px 40px rgba(15,28,36,.14);
+    transform:translateY(-102%);
+    visibility:hidden;
+    transition:transform .45s var(--ease),visibility 0s linear .45s;
+    max-height:100vh;overflow:auto;
+  }
+  .nav.is-open{transform:translateY(0);visibility:visible;transition:transform .45s var(--ease),visibility 0s}
+
+  /* Пока меню открыто, кнопка в строке уступает место списку */
+  .nav.is-open ~ .header__cta{opacity:0;visibility:hidden;pointer-events:none}
+
+  .nav__list{flex-direction:column;gap:0;width:100%;margin-bottom:22px}
+  .nav__list li{border-bottom:1px solid var(--ink-12)}
+  .nav__item--faq{display:list-item}
+
+  .nav__link{
+    display:block;padding:15px 0;
+    color:var(--ink);font-size:1.08rem;font-family:var(--font-display);
+  }
+  .nav__link::after{bottom:10px}
+  .nav__link.is-current{color:var(--blue)}
+  .header.is-solid .nav__link{color:var(--ink)}
+  .header.is-solid .nav__link.is-current{color:var(--blue)}
+
+  .nav__actions{flex-direction:column;align-items:stretch;gap:14px;width:100%}
+  .phone{
+    color:var(--ink);font-size:1.15rem;font-weight:600;text-align:center;
+    padding:6px 0;border-bottom:0;
+  }
+  .header.is-solid .phone{color:var(--ink)}
+
+  /* В меню у кнопки полная подпись, в строке шапки — короткая */
+  .nav__cta .label-wide{display:none}
+  .nav__cta .label-menu{display:inline}
+  .header__cta .label-wide{display:inline}
+}
+
+@media (max-width:767px){
+  /* Шапка: логотип и бургер. Фон и кнопка появляются
+     только после первого экрана (класс is-solid ставит скрипт) */
+  .header.is-solid{background:rgba(255,255,255,.8)}
+  .header__inner{position:relative}
+
+  /* Кнопка по центру и вне потока: её появление не двигает вёрстку */
+  .header__cta{
+    display:inline-flex;
+    position:absolute;top:50%;left:50%;
+    white-space:nowrap;
+    transform:translate(-50%,-50%) translateY(-5px);
+    opacity:0;visibility:hidden;pointer-events:none;
+    background:rgba(0,149,186,.8);
+    backdrop-filter:blur(6px);
+    transition:opacity .35s var(--ease),transform .35s var(--ease),
+               visibility .35s var(--ease),background-color .3s var(--ease);
+  }
+  .header.is-solid .header__cta{
+    opacity:1;visibility:visible;pointer-events:auto;
+    transform:translate(-50%,-50%);
+    transition-delay:.12s;
+  }
+  .header__cta:active{background:var(--blue)}
+
+  /* Название бренда уступает место кнопке */
+  .brand__text{
+    transition:opacity .35s var(--ease),transform .35s var(--ease);
+  }
+  .header.is-solid .brand__text{
+    opacity:0;transform:translateY(-5px);pointer-events:none;
+  }
+  .header__cta .label-wide{display:none}
+  .header__cta .label-mobile{display:inline}
+  .header__cta.btn--sm{padding:10px 14px;font-size:.8rem}
+  .burger{margin-right:-10px}
+
+}
+
+@media (max-width:640px){
+  body{font-size:16px}
+  .footer__bottom{justify-content:flex-start}
+}
+
+/* ---------- Уважение к prefers-reduced-motion ---------- */
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{
+    animation-duration:.001ms !important;
+    transition-duration:.001ms !important;
+  }
+  .reveal{opacity:1;transform:none}
+  .parallax img{transform:none !important}
+  .hero__anim{opacity:1;transform:none;animation:none}
+  .card__inner{transition:none}
+  .card__face{transition:none}
+}
