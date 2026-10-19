@@ -24,10 +24,15 @@
 # и «Команда» из файлов data/groups.json и data/team.json
 DirectoryIndex index.php index.html
 
-# Старая ссылка /index.html ведёт на главную
 <IfModule mod_rewrite.c>
   RewriteEngine On
+
+  # Старая ссылка /index.html ведёт на главную
   RewriteRule ^index\.html$ / [R=301,L]
+
+  # Вход в личный кабинет. Короткий адрес /login без расширения:
+  # его диктуют вслух и пишут в сообщениях родителям.
+  RewriteRule ^login/?$ cabinet/login.html [L]
 </IfModule>
 
 # Кодировка по умолчанию

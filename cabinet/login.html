@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0F1C24">
+<title>Вход в личный кабинет — Империя льда</title>
+
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preload" href="/assets/fonts/prata-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/assets/fonts/golos-text-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/cabinet/cabinet.css?v=20261019">
+</head>
+<body class="auth">
+
+<main class="auth__shell">
+
+  <a class="auth__brand" href="/">
+    <img src="/assets/logo.png" alt="" width="560" height="532" aria-hidden="true">
+    <span>
+      <b>Империя льда</b>
+      Личный кабинет
+    </span>
+  </a>
+
+  <div class="card" id="card">
+
+    <!-- ========== Шаг 1. Кто вы и куда прислать код ========== -->
+    <section class="step" id="step-login" aria-labelledby="h-login">
+      <h1 class="h1" id="h-login">Вход в кабинет</h1>
+      <p class="lede">Введите телефон или почту, которые вы оставляли в школе.
+         Пришлём короткий код.</p>
+
+      <form id="form-code" novalidate>
+        <div class="field">
+          <label for="login">Телефон или почта</label>
+          <input id="login" name="login" type="text" autocomplete="username"
+                 inputmode="text" spellcheck="false" autocapitalize="off"
+                 placeholder="+7 999 000 00 00" required>
+          <p class="field__note" id="login-note" hidden></p>
+        </div>
+
+        <fieldset class="channels">
+          <legend>Куда прислать код</legend>
+          <div class="channels__row" role="radiogroup" aria-label="Куда прислать код">
+            <label class="chan">
+              <input type="radio" name="channel" value="sms" checked>
+              <span class="chan__box">
+                <span class="chan__name">СМС</span>
+                <span class="chan__hint">на телефон</span>
+              </span>
+            </label>
+            <label class="chan">
+              <input type="radio" name="channel" value="email">
+              <span class="chan__box">
+                <span class="chan__name">Почта</span>
+                <span class="chan__hint">письмом</span>
+              </span>
+            </label>
+            <label class="chan">
+              <input type="radio" name="channel" value="telegram">
+              <span class="chan__box">
+                <span class="chan__name">Telegram</span>
+                <span class="chan__hint">от бота школы</span>
+              </span>
+            </label>
+          </div>
+        </fieldset>
+
+        <p class="alert" id="alert-login" role="alert" hidden></p>
+
+        <button class="btn btn--primary" type="submit" id="btn-code">Получить код</button>
+      </form>
+
+      <p class="switch">
+        Тренерам и администратору —
+        <button type="button" class="link" data-go="step-password">вход по паролю</button>
+      </p>
+    </section>
+
+    <!-- ========== Шаг 2. Код ========== -->
+    <section class="step" id="step-code" aria-labelledby="h-code" hidden>
+      <h1 class="h1" id="h-code">Код отправлен</h1>
+      <p class="lede" id="code-lede">Введите шесть цифр из сообщения.</p>
+
+      <form id="form-verify" novalidate>
+        <div class="field">
+          <label for="code">Код из сообщения</label>
+          <input id="code" name="code" type="text" inputmode="numeric"
+                 autocomplete="one-time-code" pattern="[0-9]*" maxlength="6"
+                 class="code-input" placeholder="------" required>
+        </div>
+
+        <p class="alert" id="alert-code" role="alert" hidden></p>
+
+        <button class="btn btn--primary" type="submit" id="btn-verify">Войти</button>
+      </form>
+
+      <p class="switch switch--stack">
+        <button type="button" class="link" id="btn-resend" disabled>Отправить код ещё раз</button>
+        <button type="button" class="link" data-go="step-login">Изменить телефон или почту</button>
+      </p>
+    </section>
+
+    <!-- ========== Вход по паролю ========== -->
+    <section class="step" id="step-password" aria-labelledby="h-password" hidden>
+      <h1 class="h1" id="h-password">Вход по паролю</h1>
+      <p class="lede">Учётную запись тренера создаёт администратор школы.</p>
+
+      <form id="form-password" novalidate>
+        <div class="field">
+          <label for="login2">Телефон или почта</label>
+          <input id="login2" name="login" type="text" autocomplete="username"
+                 spellcheck="false" autocapitalize="off" required>
+        </div>
+        <div class="field">
+          <label for="password">Пароль</label>
+          <input id="password" name="password" type="password"
+                 autocomplete="current-password" required>
+        </div>
+
+        <p class="alert" id="alert-password" role="alert" hidden></p>
+
+        <button class="btn btn--primary" type="submit" id="btn-login">Войти</button>
+      </form>
+
+      <p class="switch">
+        <button type="button" class="link" data-go="step-login">Войти по коду</button>
+      </p>
+    </section>
+
+    <!-- ========== Смена пароля при первом входе ========== -->
+    <section class="step" id="step-change" aria-labelledby="h-change" hidden>
+      <h1 class="h1" id="h-change">Задайте свой пароль</h1>
+      <p class="lede">Пароль, который выдал администратор, знает не только вы.
+         Замените его на свой — не короче восьми символов.</p>
+
+      <form id="form-change" novalidate>
+        <div class="field">
+          <label for="current">Пароль от администратора</label>
+          <input id="current" name="current_password" type="password"
+                 autocomplete="current-password" required>
+        </div>
+        <div class="field">
+          <label for="fresh">Новый пароль</label>
+          <input id="fresh" name="new_password" type="password" minlength="8"
+                 autocomplete="new-password" required>
+        </div>
+
+        <p class="alert" id="alert-change" role="alert" hidden></p>
+
+        <button class="btn btn--primary" type="submit" id="btn-change">Сохранить и войти</button>
+      </form>
+    </section>
+
+    <!-- ========== Вошли ========== -->
+    <section class="step" id="step-done" aria-labelledby="h-done" hidden>
+      <div class="done__mark" aria-hidden="true">
+        <svg viewBox="0 0 48 48" width="48" height="48" fill="none">
+          <circle cx="24" cy="24" r="23" stroke="currentColor" stroke-width="1.5" opacity=".3"/>
+          <path d="M15 24.5l6.5 6.5L33 18" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h1 class="h1" id="h-done">Вы вошли</h1>
+      <p class="lede" id="done-who"></p>
+      <div id="done-next"></div>
+      <p class="switch">
+        <button type="button" class="link" id="btn-logout">Выйти</button>
+      </p>
+    </section>
+
+  </div>
+
+  <p class="auth__foot">
+    Не получается войти — напишите в школу:
+    <a href="tel:+79992154556">+7 999 215-45-56</a>
+  </p>
+
+</main>
+
+<script src="/cabinet/login.js?v=20261019"></script>
+</body>
+</html>

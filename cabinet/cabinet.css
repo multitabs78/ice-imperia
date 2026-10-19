@@ -1,0 +1,361 @@
+/* =========================================================
+   Империя льда — личный кабинет
+   ---------------------------------------------------------
+   Отдельный от сайта файл: публичные страницы не трогаем.
+   Палитра и шрифты те же, чтобы кабинет читался продолжением
+   сайта, а не чужой системой.
+   ========================================================= */
+
+@font-face{
+  font-family:"Prata";
+  src:url("/assets/fonts/prata-400.woff2") format("woff2");
+  font-weight:400; font-style:normal; font-display:swap;
+}
+@font-face{
+  font-family:"Golos Text";
+  src:url("/assets/fonts/golos-text-400.woff2") format("woff2");
+  font-weight:400; font-style:normal; font-display:swap;
+}
+@font-face{
+  font-family:"Golos Text";
+  src:url("/assets/fonts/golos-text-500.woff2") format("woff2");
+  font-weight:500; font-style:normal; font-display:swap;
+}
+@font-face{
+  font-family:"Golos Text";
+  src:url("/assets/fonts/golos-text-600.woff2") format("woff2");
+  font-weight:600; font-style:normal; font-display:swap;
+}
+
+:root{
+  --white:#FFFFFF;
+  --sand:#F8F5F0;
+  --ink:#2C2416;
+  --ink-70:rgba(44,36,22,.70);
+  --ink-45:rgba(44,36,22,.45);
+  --ink-12:rgba(44,36,22,.12);
+  --blue:#0095BA;
+  --blue-dark:#007693;
+  --gold:#CD9E55;
+  --silver:#E8EEF0;
+  --deep:#0F1C24;
+  --deep-2:#1A2A32;
+  --alarm:#B3261E;
+
+  --font-display:"Prata",Georgia,"Times New Roman",serif;
+  --font-text:"Golos Text",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+
+  --r:4px;
+  --ease:cubic-bezier(.25,.6,.25,1);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none !important}
+
+html{-webkit-text-size-adjust:100%}
+
+body{
+  margin:0;
+  min-height:100vh;
+  min-height:100dvh;
+  font:400 16px/1.6 var(--font-text);
+  color:var(--ink);
+  background:var(--deep);
+  -webkit-font-smoothing:antialiased;
+}
+
+/* Свет над катком: один мягкий источник сверху, без картинок */
+body.auth{
+  background:
+    radial-gradient(120% 70% at 50% -10%, rgba(0,149,186,.22) 0%, rgba(15,28,36,0) 60%),
+    linear-gradient(180deg, var(--deep-2) 0%, var(--deep) 100%);
+  background-attachment:fixed;
+}
+
+.auth__shell{
+  min-height:100vh;
+  min-height:100dvh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:26px;
+  padding:40px 16px;
+}
+
+/* --- Шапка со знаком школы ------------------------------- */
+
+.auth__brand{
+  display:inline-flex;
+  align-items:center;
+  gap:14px;
+  text-decoration:none;
+  color:var(--white);
+  opacity:.92;
+  transition:opacity .4s var(--ease);
+}
+.auth__brand:hover{opacity:1}
+.auth__brand img{
+  width:46px;height:auto;display:block;
+  filter:brightness(0) invert(1);
+  opacity:.9;
+}
+.auth__brand span{display:block;font-size:13px;line-height:1.35;color:rgba(255,255,255,.62)}
+.auth__brand b{
+  display:block;
+  font:400 19px/1.2 var(--font-display);
+  letter-spacing:.02em;
+  color:var(--white);
+  margin:0 0 2px;
+}
+
+/* --- Карточка -------------------------------------------- */
+
+.card{
+  width:100%;
+  max-width:420px;
+  background:var(--white);
+  border-radius:var(--r);
+  padding:clamp(26px,5vw,38px);
+  box-shadow:0 1px 2px rgba(0,0,0,.14), 0 18px 50px rgba(0,0,0,.28);
+}
+
+.step{animation:appear .45s var(--ease) both}
+@keyframes appear{
+  from{opacity:0;transform:translateY(6px)}
+  to{opacity:1;transform:none}
+}
+
+.h1{
+  margin:0 0 8px;
+  font:400 clamp(24px,4.4vw,28px)/1.2 var(--font-display);
+  letter-spacing:.01em;
+}
+.lede{
+  margin:0 0 26px;
+  color:var(--ink-70);
+  font-size:15px;
+  line-height:1.55;
+}
+
+/* --- Поля ------------------------------------------------ */
+
+.field{margin:0 0 18px}
+.field label{
+  display:block;
+  margin:0 0 7px;
+  font-size:13px;
+  font-weight:500;
+  color:var(--ink-70);
+}
+.field input{
+  width:100%;
+  padding:13px 14px;
+  font:400 16px/1.4 var(--font-text);   /* 16px — иначе iOS увеличивает страницу */
+  color:var(--ink);
+  background:var(--white);
+  border:1px solid var(--ink-12);
+  border-radius:var(--r);
+  transition:border-color .3s var(--ease), box-shadow .3s var(--ease);
+}
+.field input::placeholder{color:var(--ink-45)}
+.field input:hover{border-color:rgba(44,36,22,.24)}
+.field input:focus{
+  outline:none;
+  border-color:var(--blue);
+  box-shadow:0 0 0 3px rgba(0,149,186,.16);
+}
+.field input[aria-invalid="true"]{border-color:var(--alarm)}
+
+.field__note{
+  margin:7px 0 0;
+  font-size:13px;
+  color:var(--ink-45);
+}
+
+.code-input{
+  text-align:center;
+  font-size:26px !important;
+  letter-spacing:.42em;
+  text-indent:.42em;          /* компенсирует разрядку справа */
+  font-variant-numeric:tabular-nums;
+}
+
+/* --- Выбор канала ---------------------------------------- */
+
+.channels{border:0;padding:0;margin:0 0 22px}
+.channels legend{
+  padding:0;
+  margin:0 0 9px;
+  font-size:13px;
+  font-weight:500;
+  color:var(--ink-70);
+}
+.channels__row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+
+.chan{position:relative;display:block}
+.chan input{
+  position:absolute;
+  width:1px;height:1px;
+  opacity:0;
+  pointer-events:none;
+}
+.chan__box{
+  display:block;
+  padding:11px 8px;
+  text-align:center;
+  border:1px solid var(--ink-12);
+  border-radius:var(--r);
+  cursor:pointer;
+  transition:border-color .3s var(--ease), background-color .3s var(--ease);
+}
+.chan__box:hover{border-color:rgba(44,36,22,.24)}
+.chan__name{display:block;font-size:14px;font-weight:500;line-height:1.3}
+.chan__hint{display:block;margin-top:2px;font-size:11.5px;color:var(--ink-45);line-height:1.3}
+
+.chan input:checked + .chan__box{
+  border-color:var(--blue);
+  background:rgba(0,149,186,.07);
+}
+.chan input:focus-visible + .chan__box{
+  outline:2px solid var(--blue);
+  outline-offset:2px;
+}
+.chan input:disabled + .chan__box{
+  opacity:.4;
+  cursor:not-allowed;
+}
+
+/* --- Кнопки ---------------------------------------------- */
+
+.btn{
+  display:block;
+  width:100%;
+  padding:14px 18px;
+  font:500 16px/1.2 var(--font-text);
+  text-align:center;
+  border:1px solid transparent;
+  border-radius:var(--r);
+  cursor:pointer;
+  transition:background-color .3s var(--ease), color .3s var(--ease), opacity .3s var(--ease);
+}
+.btn--primary{background:var(--blue);color:var(--white)}
+.btn--primary:hover{background:var(--blue-dark)}
+.btn:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.btn[disabled]{opacity:.55;cursor:default}
+.btn.is-busy{opacity:.7;cursor:progress}
+
+.link{
+  padding:0;
+  border:0;
+  background:none;
+  font:inherit;
+  font-size:14px;
+  color:var(--blue);
+  text-decoration:underline;
+  text-underline-offset:2px;
+  text-decoration-thickness:1px;
+  cursor:pointer;
+  transition:color .3s var(--ease);
+}
+.link:hover{color:var(--blue-dark)}
+.link[disabled]{color:var(--ink-45);text-decoration:none;cursor:default}
+.link:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:2px}
+
+.switch{
+  margin:20px 0 0;
+  font-size:14px;
+  color:var(--ink-45);
+  text-align:center;
+  line-height:1.7;
+}
+.switch--stack{display:flex;flex-direction:column;gap:6px;align-items:center}
+
+/* --- Сообщение об ошибке --------------------------------- */
+
+.alert{
+  margin:0 0 18px;
+  padding:12px 14px;
+  font-size:14px;
+  line-height:1.5;
+  color:#8A1B15;
+  background:rgba(179,38,30,.07);
+  border-left:2px solid var(--alarm);
+  border-radius:0 var(--r) var(--r) 0;
+}
+.alert--calm{
+  color:var(--ink-70);
+  background:var(--silver);
+  border-left-color:var(--blue);
+}
+
+.notebox{
+  margin:20px 0 0;
+  padding:12px 14px;
+  font-size:14px;
+  line-height:1.5;
+  color:var(--ink-70);
+  background:var(--silver);
+  border-left:2px solid var(--blue);
+  border-radius:0 var(--r) var(--r) 0;
+}
+
+/* --- Вошли ----------------------------------------------- */
+
+.done__mark{color:var(--blue);margin:0 0 14px}
+.done__roles{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin:0 0 4px;
+  padding:0;
+  list-style:none;
+}
+.done__roles li{
+  padding:3px 10px;
+  font-size:13px;
+  color:var(--ink-70);
+  background:var(--sand);
+  border-radius:999px;
+}
+.done__children{margin:18px 0 0;padding:0;list-style:none}
+.done__children li{
+  padding:10px 0;
+  border-top:1px solid var(--ink-12);
+  font-size:15px;
+}
+
+/* --- Подпись под карточкой ------------------------------- */
+
+.auth__foot{
+  margin:0;
+  font-size:13.5px;
+  color:rgba(255,255,255,.5);
+  text-align:center;
+}
+.auth__foot a{
+  color:rgba(255,255,255,.8);
+  text-decoration:none;
+  border-bottom:1px solid rgba(255,255,255,.25);
+  white-space:nowrap;          /* номер не должен разрываться посередине */
+}
+.auth__foot a:hover{color:var(--white)}
+
+/* --- Мелкие экраны --------------------------------------- */
+
+@media (max-width:420px){
+  .auth__shell{justify-content:flex-start;padding-top:32px;gap:20px}
+  .channels__row{grid-template-columns:1fr;gap:6px}
+  .chan__box{display:flex;align-items:baseline;gap:8px;text-align:left}
+  .chan__hint{margin-top:0}
+}
+
+/* --- Спокойный режим ------------------------------------- */
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
+}

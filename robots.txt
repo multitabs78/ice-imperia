@@ -2,5 +2,9 @@ User-agent: *
 Allow: /
 Disallow: /send.php
 Disallow: /data/
+Disallow: /api/
+Disallow: /db/
+Disallow: /cabinet/
+Disallow: /login
 
 Sitemap: https://ice-imperia.ru/sitemap.xml

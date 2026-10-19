@@ -105,6 +105,12 @@ class Db
         return date('Y-m-d H:i:s');
     }
 
+    /** Есть ли уже соединение. Не создаёт его. */
+    public static function connected()
+    {
+        return self::$pdo instanceof PDO;
+    }
+
     public static function begin()
     {
         if (!self::pdo()->inTransaction()) {
@@ -114,15 +120,21 @@ class Db
 
     public static function commit()
     {
-        if (self::pdo()->inTransaction()) {
-            self::pdo()->commit();
+        if (self::connected() && self::$pdo->inTransaction()) {
+            self::$pdo->commit();
         }
     }
 
+    /**
+     * Откат не создаёт соединение. Иначе при недоступной базе
+     * обработчик ошибок пытался бы соединиться ещё раз, падал
+     * внутри catch — и вместо понятного ответа наружу уходила
+     * бы фатальная ошибка PHP вместе с путями к файлам.
+     */
     public static function rollback()
     {
-        if (self::pdo()->inTransaction()) {
-            self::pdo()->rollBack();
+        if (self::connected() && self::$pdo->inTransaction()) {
+            self::$pdo->rollBack();
         }
     }
 }
