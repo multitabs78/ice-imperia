@@ -238,6 +238,7 @@
   var TABS = [
     { id: 'athletes', title: 'Спортсмены', roles: ['admin', 'coach'] },
     { id: 'groups',   title: 'Группы',     roles: ['admin', 'coach'] },
+    { id: 'schedule', title: 'Расписание', roles: ['admin', 'coach'] },
     { id: 'coaches',  title: 'Тренеры',    roles: ['admin'] },
     { id: 'parents',  title: 'Родители',   roles: ['admin'] },
     { id: 'tariffs',  title: 'Тарифы',     roles: ['admin'] },
@@ -766,7 +767,8 @@
       }
 
       box.appendChild(el('div', { class: 'panes' }, [
-        el('div', null, [el('div', { class: 'pane' }, [el('h2', null, 'Сведения'), facts]), coachPane]),
+        el('div', null, [el('div', { class: 'pane' }, [el('h2', null, 'Сведения'), facts]),
+                         coachPane, rulesPane(g)]),
         listPane
       ]));
     });
@@ -1170,6 +1172,395 @@
   }
 
   /* =====================================================
+     Расписание
+     ===================================================== */
+
+  var DAYS = ['', 'понедельник', 'вторник', 'среда', 'четверг',
+              'пятница', 'суббота', 'воскресенье'];
+  var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+                'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+
+  /** Понедельник недели, в которую попадает дата. */
+  function weekStart(iso) {
+    var d = iso ? new Date(iso + 'T00:00:00') : new Date();
+    var shift = (d.getDay() + 6) % 7;        // воскресенье — седьмой день, а не нулевой
+    d.setDate(d.getDate() - shift);
+    return isoDate(d);
+  }
+
+  function isoDate(d) {
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
+         + '-' + ('0' + d.getDate()).slice(-2);
+  }
+
+  function shiftDays(iso, days) {
+    var d = new Date(iso + 'T00:00:00');
+    d.setDate(d.getDate() + days);
+    return isoDate(d);
+  }
+
+  function dayTitle(iso) {
+    var d = new Date(iso + 'T00:00:00');
+    return d.getDate() + ' ' + MONTHS[d.getMonth()];
+  }
+
+  function screenSchedule(from) {
+    drawTabs('schedule');
+    loading();
+
+    var start = weekStart(from);
+    var end = shiftDays(start, 6);
+
+    api('GET', '/trainings?from=' + start + '&to=' + end).then(function (answer) {
+      if (!answer.ok) { return fail(answer); }
+
+      var items = answer.data.items || [];
+      var box = clear(page);
+
+      var actions = [
+        el('button', { class: 'btn btn--ghost btn--small',
+          onclick: function () { window.location.hash = '#/schedule/' + shiftDays(start, -7); }
+        }, '← Неделя назад'),
+        el('button', { class: 'btn btn--ghost btn--small',
+          onclick: function () { window.location.hash = '#/schedule/' + weekStart(null); }
+        }, 'Сегодня'),
+        el('button', { class: 'btn btn--ghost btn--small',
+          onclick: function () { window.location.hash = '#/schedule/' + shiftDays(start, 7); }
+        }, 'Неделя вперёд →')
+      ];
+
+      if (can(['admin'])) {
+        actions.push(el('button', { class: 'btn btn--primary btn--small',
+          onclick: generateSchedule }, 'Обновить расписание'));
+      }
+
+      box.appendChild(heading('Расписание',
+        dayTitle(start) + ' — ' + dayTitle(end), actions));
+
+      // Раскладываем по дням, чтобы пустые дни тоже были видны:
+      // пустой четверг — это информация, а не отсутствие строки
+      var byDay = {};
+      items.forEach(function (t) {
+        (byDay[t.date] = byDay[t.date] || []).push(t);
+      });
+
+      var week = el('div', { class: 'week' });
+      var today = isoDate(new Date());
+
+      for (var i = 0; i < 7; i++) {
+        var day = shiftDays(start, i);
+        var list = byDay[day] || [];
+
+        var head = el('div', { class: 'day__head' }, [
+          el('b', null, DAYS[i + 1]),
+          el('span', null, dayTitle(day))
+        ]);
+
+        var body = el('div', { class: 'day__body' });
+        if (!list.length) {
+          body.appendChild(el('p', { class: 'day__empty', text: 'нет занятий' }));
+        } else {
+          list.forEach(function (t) { body.appendChild(trainingCard(t)); });
+        }
+
+        week.appendChild(el('div', {
+          class: 'day' + (day === today ? ' is-today' : '')
+                       + (list.length ? '' : ' is-empty')
+        }, [head, body]));
+      }
+
+      box.appendChild(week);
+
+      if (!items.length) {
+        box.appendChild(el('p', { class: 'field__note', text: can(['admin'])
+          ? 'Занятий на этой неделе нет. Постоянное расписание задаётся в карточке группы, '
+            + 'а кнопка «Обновить расписание» раскрывает его в конкретные занятия.'
+          : 'Занятий на этой неделе нет.' }));
+      }
+    });
+  }
+
+  function trainingCard(t) {
+    var card = el('div', { class: 'tr tr--' + t.status });
+
+    // Время и группа в одну строку: в узкой колонке дня
+    // каждая лишняя строка заметна
+    card.appendChild(el('div', { class: 'tr__head' }, [
+      el('span', { class: 'tr__time' }, t.time_start),
+      el('b', null, t.group_code)
+    ]));
+    card.appendChild(el('div', { class: 'tr__main' }, [
+      el('span', { class: 'tr__sub' },
+         [t.kind_name, t.venue_name, t.coach_name || 'тренер не назначен']
+           .filter(Boolean).join(' · '))
+    ]));
+
+    var marks = el('div', { class: 'tr__marks' });
+    if (t.substitute) { marks.appendChild(el('span', { class: 'pill' }, 'замена')); }
+    if (t.status === 'cancelled') {
+      marks.appendChild(el('span', { class: 'pill pill--warn' }, 'отменена'));
+    }
+    if (t.status === 'moved') {
+      marks.appendChild(el('span', { class: 'pill pill--off' }, 'перенесена'));
+    }
+    if (t.status === 'held') {
+      marks.appendChild(el('span', { class: 'pill' }, 'проведена'));
+    }
+    card.appendChild(marks);
+
+    if (t.cancel_reason) {
+      card.appendChild(el('div', { class: 'tr__why', text: t.cancel_reason }));
+    }
+
+    if (t.status === 'planned') {
+      var act = el('div', { class: 'tr__act' });
+      act.appendChild(el('button', { class: 'linkish',
+        onclick: function () { setTrainingCoach(t); } }, 'Заменить тренера'));
+      if (can(['admin'])) {
+        act.appendChild(el('button', { class: 'linkish',
+          onclick: function () { moveTraining(t); } }, 'Перенести'));
+        act.appendChild(el('button', { class: 'linkish linkish--danger',
+          onclick: function () { cancelTraining(t); } }, 'Отменить'));
+      }
+      card.appendChild(act);
+    }
+
+    return card;
+  }
+
+  function generateSchedule() {
+    openSheet({
+      title: 'Обновить расписание',
+      note: 'Раскрывает постоянное расписание групп в конкретные занятия. '
+          + 'Уже существующие занятия не трогаются — отменённые не вернутся, '
+          + 'отметки не пропадут.',
+      submit: 'Обновить',
+      fields: [
+        { name: 'weeks', label: 'На сколько недель вперёд', type: 'number', value: 8 }
+      ],
+      onSubmit: function (values) {
+        return api('POST', '/schedule/generate', values).then(function (answer) {
+          if (!answer.ok) { return answer; }
+
+          var d = answer.data;
+          toast(d.created
+            ? 'Добавлено занятий: ' + d.created
+            : 'Всё уже на месте, новых занятий нет');
+
+          if (d.skipped && d.skipped.length) {
+            // Накладки надо показать подробно: «пропущено 3»
+            // без объяснения заставит искать вручную
+            setTimeout(function () {
+              openSheet({
+                title: 'Не поместилось',
+                note: 'Эти занятия не созданы — в то же время занят лёд или тренер. '
+                    + 'Поправьте расписание и обновите ещё раз.',
+                submit: 'Понятно',
+                fields: [],
+                onSubmit: function () { screenSchedule(); }
+              });
+              var list = el('div', { class: 'pane' });
+              d.skipped.forEach(function (one) {
+                list.appendChild(el('div', { class: 'line' }, [
+                  el('div', { class: 'line__main' }, [
+                    el('span', null, one.group + ', ' + dayTitle(one.date) + ', ' + one.time),
+                    el('span', { class: 'line__sub' }, one.reason)
+                  ])
+                ]));
+              });
+              sheetForm.insertBefore(list, sheetForm.querySelector('.sheet__act'));
+            }, 100);
+          } else {
+            screenSchedule();
+          }
+        });
+      }
+    });
+  }
+
+  function cancelTraining(t) {
+    confirmWithReason({
+      title: 'Отменить занятие',
+      note: t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start
+          + '. Занятие останется в расписании с пометкой об отмене — школа должна его '
+          + 'перенести или вернуть бонусным.',
+      submit: 'Отменить занятие',
+      onConfirm: function (why) {
+        return api('POST', '/trainings/' + t.id + '/cancel', { reason: why })
+          .then(function (answer) {
+            if (!answer.ok) { return answer; }
+            toast('Занятие отменено');
+            screenSchedule(t.date);
+          });
+      }
+    });
+  }
+
+  function moveTraining(t) {
+    openSheet({
+      title: 'Перенести занятие',
+      note: t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start
+          + '. На прежнем месте останется отметка о переносе со ссылкой на новое время.',
+      submit: 'Перенести',
+      fields: [
+        { name: 'date', label: 'Новая дата', type: 'date', value: t.date },
+        { name: 'time_start', label: 'Новое время', type: 'time', value: t.time_start },
+        { name: 'reason', label: 'Причина', placeholder: 'Заливка льда, соревнования' }
+      ],
+      onSubmit: function (values) {
+        return api('POST', '/trainings/' + t.id + '/move', values).then(function (answer) {
+          if (!answer.ok) { return answer; }
+          toast('Занятие перенесено');
+          screenSchedule(values.date);
+        });
+      }
+    });
+  }
+
+  function setTrainingCoach(t) {
+    api('GET', '/coaches').then(function (answer) {
+      var coaches = (answer.data.items || [])
+        .filter(function (c) { return c.id !== t.coach_id; })
+        .map(function (c) { return { value: c.id, label: c.name }; });
+
+      if (!coaches.length) {
+        toast('Больше тренеров в школе нет', true);
+        return;
+      }
+
+      openSheet({
+        title: 'Заменить тренера',
+        note: t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start
+            + '. Занятие проведёт другой тренер — и оно засчитается ему, а не '
+            + (t.coach_name || 'прежнему'),
+        submit: 'Назначить',
+        fields: [
+          { name: 'coach_id', label: 'Кто проведёт', type: 'select', options: coaches },
+          { name: 'reason', label: 'Причина', placeholder: 'Болезнь' }
+        ],
+        onSubmit: function (values) {
+          return api('POST', '/trainings/' + t.id + '/coach', values).then(function (result) {
+            if (!result.ok) { return result; }
+            toast('Тренер назначен');
+            screenSchedule(t.date);
+          });
+        }
+      });
+    });
+  }
+
+  /* --- Постоянное расписание в карточке группы ------------- */
+
+  function rulesPane(g) {
+    var pane = el('div', { class: 'pane' }, [el('h2', null, 'Постоянное расписание')]);
+    var body = el('div');
+    pane.appendChild(body);
+
+    if (can(['admin'])) {
+      pane.appendChild(el('div', { class: 'sheet__act' }, [
+        el('button', { class: 'btn btn--ghost btn--small',
+          onclick: function () { newRule(g); } }, 'Добавить занятие')
+      ]));
+    }
+
+    api('GET', '/groups/' + g.id + '/schedule').then(function (answer) {
+      var rules = (answer.data && answer.data.items) || [];
+      clear(body);
+
+      if (!rules.length) {
+        body.appendChild(el('p', { class: 'empty', text: 'Расписание не задано' }));
+        return;
+      }
+
+      rules.forEach(function (r) {
+        var line = el('div', { class: 'line' }, [
+          el('div', { class: 'line__main' }, [
+            el('span', null, r.weekday_name + ', ' + r.time_start),
+            el('span', { class: 'line__sub' },
+               [r.kind_name, r.venue_name, r.coach_name].filter(Boolean).join(' · '))
+          ])
+        ]);
+        if (can(['admin'])) {
+          line.appendChild(el('button', {
+            class: 'linkish linkish--danger line__act',
+            onclick: function () { closeRule(g, r); }
+          }, 'Убрать'));
+        }
+        body.appendChild(line);
+      });
+    });
+
+    return pane;
+  }
+
+  function newRule(g) {
+    Promise.all([api('GET', '/venues'), api('GET', '/coaches')]).then(function (results) {
+      var venues = (results[0].data.items || []).map(function (v) {
+        return { value: v.id, label: v.name };
+      });
+      if (!venues.length) {
+        toast('Сначала заведите площадку', true);
+        return;
+      }
+      var coaches = [{ value: '', label: 'из тренеров группы' }].concat(
+        (results[1].data.items || []).map(function (c) {
+          return { value: c.id, label: c.name };
+        }));
+
+      var days = [];
+      for (var i = 1; i <= 7; i++) { days.push({ value: i, label: DAYS[i] }); }
+
+      openSheet({
+        title: 'Занятие в расписании',
+        note: 'Это шаблон, а не занятие. Чтобы он превратился в конкретные тренировки, '
+            + 'нажмите «Обновить расписание» в разделе «Расписание».',
+        submit: 'Добавить',
+        fields: [
+          { name: 'weekday', label: 'День недели', type: 'select', options: days },
+          { name: 'time_start', label: 'Время начала', type: 'time', value: '17:00' },
+          { name: 'duration_min', label: 'Длительность, минут', type: 'number', value: 60 },
+          { name: 'kind', label: 'Вид занятия', type: 'select', options: [
+            { value: 'ice', label: 'лёд' },
+            { value: 'gym', label: 'зал' },
+            { value: 'choreo', label: 'хореография' }
+          ] },
+          { name: 'venue_id', label: 'Площадка', type: 'select', options: venues },
+          { name: 'coach_id', label: 'Тренер', type: 'select', options: coaches },
+          { name: 'valid_from', label: 'Действует с', type: 'date',
+            value: isoDate(new Date()) }
+        ],
+        onSubmit: function (values) {
+          if (!values.coach_id) { delete values.coach_id; }
+          return api('POST', '/groups/' + g.id + '/schedule', values).then(function (answer) {
+            if (!answer.ok) { return answer; }
+            toast('Добавлено в расписание');
+            screenGroup(g.id);
+          });
+        }
+      });
+    });
+  }
+
+  function closeRule(g, r) {
+    confirmWithReason({
+      title: 'Убрать из расписания',
+      note: r.weekday_name + ', ' + r.time_start + '. Прошедшие занятия останутся, '
+          + 'будущие запланированные — уберутся.',
+      submit: 'Убрать',
+      onConfirm: function (why) {
+        return api('DELETE', '/schedule-rules/' + r.id + '?from=' + isoDate(new Date())
+                   + '&reason=' + encodeURIComponent(why)).then(function (answer) {
+          if (!answer.ok) { return answer; }
+          toast(answer.data.removed
+            ? 'Убрано, снято занятий: ' + answer.data.removed
+            : 'Убрано из расписания');
+          screenGroup(g.id);
+        });
+      }
+    });
+  }
+
+  /* =====================================================
      Услуги и цены
      ===================================================== */
 
@@ -1308,6 +1699,62 @@
         { title: 'Имя' }, { title: 'Значение', class: 'num' },
         { title: 'Что это' }, { title: '', class: 'act' }
       ], rows)]));
+
+      box.appendChild(venuesPane());
+    });
+  }
+
+  /** Площадки: их мало и заводят их однажды, отдельный раздел им ни к чему. */
+  function venuesPane() {
+    var pane = el('div', { class: 'pane' }, [
+      el('h2', null, 'Площадки'),
+      el('p', { class: 'field__note', text:
+        'Где проходят занятия. На площадку ссылается расписание, и по ней система '
+        + 'видит, что лёд в это время уже занят.' })
+    ]);
+
+    var body = el('div');
+    pane.appendChild(body);
+    pane.appendChild(el('div', { class: 'sheet__act' }, [
+      el('button', { class: 'btn btn--ghost btn--small', onclick: newVenue }, 'Добавить площадку')
+    ]));
+
+    api('GET', '/venues').then(function (answer) {
+      var venues = (answer.data && answer.data.items) || [];
+      clear(body);
+
+      if (!venues.length) {
+        body.appendChild(el('p', { class: 'empty', text: 'Площадок пока нет' }));
+        return;
+      }
+      venues.forEach(function (v) {
+        body.appendChild(el('div', { class: 'line' }, [
+          el('div', { class: 'line__main' }, [
+            el('span', null, v.name),
+            el('span', { class: 'line__sub' }, v.address || 'адрес не указан')
+          ])
+        ]));
+      });
+    });
+
+    return pane;
+  }
+
+  function newVenue() {
+    openSheet({
+      title: 'Новая площадка',
+      submit: 'Добавить',
+      fields: [
+        { name: 'name', label: 'Название', placeholder: 'Гололёд' },
+        { name: 'address', label: 'Адрес', placeholder: 'ул. Свободы, 15' }
+      ],
+      onSubmit: function (values) {
+        return api('POST', '/venues', values).then(function (answer) {
+          if (!answer.ok) { return answer; }
+          toast('Площадка добавлена');
+          screenSettings();
+        });
+      }
     });
   }
 
@@ -1348,6 +1795,7 @@
 
     if (where === 'athletes') { return parts[1] ? screenAthlete(parts[1]) : screenAthletes(); }
     if (where === 'groups')   { return parts[1] ? screenGroup(parts[1]) : screenGroups(); }
+    if (where === 'schedule') { return screenSchedule(parts[1]); }
     if (where === 'coaches'  && can(['admin'])) { return screenCoaches(); }
     if (where === 'parents'  && can(['admin'])) { return screenParents(); }
     if (where === 'tariffs'  && can(['admin'])) { return screenTariffs(); }

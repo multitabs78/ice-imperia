@@ -624,12 +624,247 @@ $kept = (int) $pdo->query('SELECT COUNT(*) FROM subscriptions WHERE athlete_id =
                   ->fetchColumn();
 check('история абонементов осталась', $kept === 1, 'записей: ' . $kept);
 
+echo "\nПостоянное расписание\n";
+
+$r = call('POST', '/venues', array('name' => 'Гололёд', 'address' => 'ул. Свободы, 15'), $admin);
+$venue = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('площадка создана', $r['status'] === 201 && $venue, 'код ' . $r['status'] . ' ' . $r['raw']);
+
+// Считаем от ближайшего понедельника: иначе проверки
+// зависят от того, в какой день недели их запустили
+$monday = date('Y-m-d', strtotime('next monday'));
+$season = date('Y-m-d', strtotime($monday . ' -30 days'));
+
+$r = call('POST', '/groups/' . $group1 . '/schedule', array(
+    'weekday' => 1, 'time_start' => '17:00', 'duration_min' => 60,
+    'kind' => 'ice', 'venue_id' => $venue, 'coach_id' => $coach,
+    'valid_from' => $season), $admin);
+$rule1 = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('правило расписания создано', $r['status'] === 201 && $rule1,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+check('день недели назван словом', isset($r['body']['weekday_name'])
+      && $r['body']['weekday_name'] === 'понедельник',
+      isset($r['body']['weekday_name']) ? $r['body']['weekday_name'] : '—');
+
+$r = call('POST', '/groups/' . $group1 . '/schedule', array(
+    'weekday' => 1, 'time_start' => '17:00', 'kind' => 'ice',
+    'venue_id' => $venue, 'valid_from' => $season), $admin);
+check('повтор того же дня и времени — 409', $r['status'] === 409
+      && $r['body']['error'] === 'rule_exists', 'код ' . $r['status']);
+
+$r = call('POST', '/groups/' . $group1 . '/schedule', array(
+    'weekday' => 8, 'time_start' => '17:00', 'kind' => 'ice',
+    'venue_id' => $venue, 'valid_from' => $season), $admin);
+check('восьмого дня недели не бывает', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('POST', '/groups/' . $group1 . '/schedule', array(
+    'weekday' => 3, 'time_start' => '25:00', 'kind' => 'ice',
+    'venue_id' => $venue, 'valid_from' => $season), $admin);
+check('время 25:00 не принимается', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('POST', '/groups/' . $group1 . '/schedule', array(
+    'weekday' => 3, 'time_start' => '18:30', 'kind' => 'ice',
+    'venue_id' => $venue, 'coach_id' => $coach, 'valid_from' => $season), $admin);
+$rule2 = $r['body']['id'];
+check('второе занятие в неделю добавлено', $r['status'] === 201);
+
+$r = call('GET', '/groups/' . $group1 . '/schedule', null, $admin);
+check('расписание группы отдаётся по порядку дней',
+      $r['status'] === 200 && count($r['body']['items']) === 2
+      && $r['body']['items'][0]['weekday'] === 1,
+      $r['raw']);
+
+echo "\nГенерация тренировок\n";
+
+$r = call('POST', '/schedule/generate', array('group_id' => $group1, 'weeks' => 2,
+                                              'from' => $monday), $admin);
+check('тренировки созданы', $r['status'] === 200 && $r['body']['created'] === 4,
+      'создано: ' . (isset($r['body']['created']) ? $r['body']['created'] : '—'));
+
+$r = call('POST', '/schedule/generate', array('group_id' => $group1, 'weeks' => 2,
+                                              'from' => $monday), $admin);
+check('повторный запуск ничего не плодит',
+      $r['body']['created'] === 0 && $r['body']['existed'] === 4,
+      'создано ' . $r['body']['created'] . ', было ' . $r['body']['existed']);
+
+// Вторая группа на тот же лёд в то же время
+$r = call('POST', '/groups/' . $group2 . '/schedule', array(
+    'weekday' => 1, 'time_start' => '17:00', 'kind' => 'ice',
+    'venue_id' => $venue, 'valid_from' => $season), $admin);
+check('правило со встречным временем само по себе создаётся', $r['status'] === 201);
+
+$r = call('POST', '/schedule/generate', array('group_id' => $group2, 'weeks' => 2,
+                                              'from' => $monday), $admin);
+check('занятый лёд не занимается дважды',
+      $r['body']['created'] === 0 && count($r['body']['skipped']) === 2,
+      'создано ' . $r['body']['created'] . ', пропущено ' . count($r['body']['skipped']));
+check('пропуск объяснён словами',
+      isset($r['body']['skipped'][0]['reason'])
+      && strpos($r['body']['skipped'][0]['reason'], 'на льду') !== false,
+      isset($r['body']['skipped'][0]['reason']) ? $r['body']['skipped'][0]['reason'] : '—');
+
+$r = call('GET', '/trainings?from=' . $monday . '&to='
+          . date('Y-m-d', strtotime($monday . ' +13 days')), null, $admin);
+$trainings = $r['body']['items'];
+check('тренировки видны администратору', $r['status'] === 200 && count($trainings) === 4,
+      'тренировок: ' . count($trainings));
+check('у тренировки есть название группы и площадки',
+      $trainings[0]['group_code'] === 'СОГ-1' && $trainings[0]['venue_name'] === 'Гололёд',
+      json_encode($trainings[0], JSON_UNESCAPED_UNICODE));
+
+$first = $trainings[0]['id'];
+
+echo "\nОтмена и перенос\n";
+
+$r = call('POST', '/trainings/' . $first . '/cancel', array(), $admin);
+check('без причины не отменяем', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('POST', '/trainings/' . $first . '/cancel',
+          array('reason' => 'Заливка льда'), $admin);
+check('тренировка отменена', $r['status'] === 200 && $r['body']['status'] === 'cancelled',
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/trainings/' . $first . '/cancel',
+          array('reason' => 'Ещё раз'), $admin);
+check('дважды не отменяем', $r['status'] === 409, 'код ' . $r['status']);
+
+$r = call('POST', '/schedule/generate', array('group_id' => $group1, 'weeks' => 2,
+                                              'from' => $monday), $admin);
+check('генерация не воскрешает отменённое', $r['body']['created'] === 0,
+      'создано: ' . $r['body']['created']);
+
+// Проведённое занятие отменять нельзя: на нём уже
+// отмечены посещения, и отмена молча обнулила бы их
+$held = $trainings[3]['id'];
+$pdo->exec('UPDATE trainings SET status = \'held\' WHERE id = ' . (int) $held);
+$r = call('POST', '/trainings/' . $held . '/cancel',
+          array('reason' => 'Передумали'), $admin);
+check('проведённое занятие не отменяем', $r['status'] === 409
+      && $r['body']['error'] === 'training_held', 'код ' . $r['status'] . ' ' . $r['raw']);
+$pdo->exec('UPDATE trainings SET status = \'planned\' WHERE id = ' . (int) $held);
+
+$second = $trainings[1]['id'];
+$moveTo = date('Y-m-d', strtotime($monday . ' +1 day'));
+
+$r = call('POST', '/trainings/' . $second . '/move',
+          array('date' => $moveTo, 'time_start' => '17:00', 'reason' => 'Соревнования'), $admin);
+$movedId = isset($r['body']['training']['id']) ? $r['body']['training']['id'] : null;
+check('тренировка перенесена', $r['status'] === 201 && $movedId,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$old = $pdo->query('SELECT status, moved_to_training_id FROM trainings WHERE id = ' . (int) $second)
+           ->fetch();
+check('у прежней осталась ссылка на новую',
+      $old['status'] === 'moved' && (int) $old['moved_to_training_id'] === (int) $movedId,
+      json_encode($old));
+
+$r = call('POST', '/trainings/' . $second . '/move',
+          array('date' => $moveTo, 'time_start' => '19:00', 'reason' => 'Ещё раз'), $admin);
+check('перенесённую второй раз не переносим', $r['status'] === 409, 'код ' . $r['status']);
+
+$pdo->exec('UPDATE trainings SET status = \'held\' WHERE id = ' . (int) $movedId);
+$r = call('POST', '/trainings/' . $movedId . '/move',
+          array('date' => $moveTo, 'time_start' => '20:00', 'reason' => 'Поздно'), $admin);
+check('проведённую не переносим', $r['status'] === 409
+      && $r['body']['error'] === 'training_held', 'код ' . $r['status']);
+$pdo->exec('UPDATE trainings SET status = \'planned\' WHERE id = ' . (int) $movedId);
+
+echo "\nЗамена тренера\n";
+
+$r = call('POST', '/coaches', array(
+    'last_name' => 'Лазурина', 'first_name' => 'Мария',
+    'email' => 'lazurina@example.test', 'password' => 'subpass12345'), $admin);
+$coach2 = $r['body']['id'];
+check('второй тренер заведён', $r['status'] === 201 && $coach2, 'код ' . $r['status']);
+
+$third = $trainings[2]['id'];
+
+$r = call('POST', '/trainings/' . $third . '/coach', array('coach_id' => $coach2), $coachToken);
+check('тренер группы ставит замену сам', $r['status'] === 200
+      && (int) $r['body']['coach_id'] === (int) $coach2, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('замена помечена как замена', $r['body']['substitute'] === true, $r['raw']);
+
+$r = call('POST', '/auth/login', array('login' => 'lazurina@example.test',
+                                       'password' => 'subpass12345'));
+$coach2Token = $r['body']['token'];
+
+$r = call('GET', '/trainings/' . $third, null, $coach2Token);
+check('заменяющий видит тренировку чужой группы', $r['status'] === 200,
+      'код ' . $r['status']);
+check('и видит состав группы на этот день',
+      isset($r['body']['athletes']) && is_array($r['body']['athletes']), $r['raw']);
+
+$fourth = $trainings[3]['id'];
+$r = call('GET', '/trainings/' . $fourth, null, $coach2Token);
+check('остальные занятия чужой группы ему закрыты', $r['status'] === 403,
+      'код ' . $r['status']);
+
+$r = call('POST', '/trainings/' . $fourth . '/coach', array('coach_id' => $coach2), $coach2Token);
+check('посторонний тренер замену не назначает', $r['status'] === 403, 'код ' . $r['status']);
+
+$r = call('POST', '/trainings/' . $third . '/coach', array('coach_id' => $coach2), $admin);
+check('назначить того же — 409', $r['status'] === 409
+      && $r['body']['error'] === 'same_coach', 'код ' . $r['status']);
+
+$r = call('GET', '/trainings?mine=1&from=' . $monday . '&to='
+          . date('Y-m-d', strtotime($monday . ' +13 days')), null, $coach2Token);
+check('в своих занятиях у заменяющего ровно одно',
+      $r['status'] === 200 && count($r['body']['items']) === 1,
+      'занятий: ' . count($r['body']['items']));
+
+echo "\nЗакрытие правила\n";
+
+$before = (int) $pdo->query('SELECT COUNT(*) FROM trainings WHERE rule_id = ' . (int) $rule2)
+                    ->fetchColumn();
+$r = call('DELETE', '/schedule-rules/' . $rule2 . '?from=' . date('Y-m-d')
+          . '&reason=' . rawurlencode('Сняли со среды'), null, $admin);
+check('правило закрыто', $r['status'] === 200 && $r['body']['removed'] > 0,
+      'убрано: ' . (isset($r['body']['removed']) ? $r['body']['removed'] : '—')
+      . ' из ' . $before);
+
+$left = (int) $pdo->query('SELECT COUNT(*) FROM trainings
+                            WHERE rule_id = ' . (int) $rule2 . ' AND status = "planned"')
+                  ->fetchColumn();
+check('будущих занятий по закрытому правилу не осталось', $left === 0, 'осталось: ' . $left);
+
+$r = call('GET', '/groups/' . $group1 . '/schedule', null, $admin);
+check('закрытое правило ушло из текущего расписания',
+      count($r['body']['items']) === 1, 'правил: ' . count($r['body']['items']));
+
+$r = call('GET', '/groups/' . $group1 . '/schedule?all=1', null, $admin);
+check('но в истории осталось', count($r['body']['items']) === 2,
+      'правил: ' . count($r['body']['items']));
+
+echo "\nКто что видит в расписании\n";
+
+$r = call('GET', '/trainings?from=' . $monday . '&to='
+          . date('Y-m-d', strtotime($monday . ' +13 days')), null, $coachToken);
+$codes = array();
+foreach ($r['body']['items'] as $one) { $codes[$one['group_code']] = true; }
+check('тренер видит только свою группу', $r['status'] === 200
+      && array_keys($codes) === array('СОГ-1'), implode(', ', array_keys($codes)));
+
+$r = call('GET', '/trainings?group_id=' . $group2 . '&from=' . $monday
+          . '&to=' . date('Y-m-d', strtotime($monday . ' +13 days')), null, $coachToken);
+check('чужую группу в расписании не запросить', $r['status'] === 403, 'код ' . $r['status']);
+
+$r = call('POST', '/groups/' . $group1 . '/schedule', array(
+    'weekday' => 5, 'time_start' => '17:00', 'kind' => 'ice',
+    'venue_id' => $venue, 'valid_from' => $season), $coachToken);
+check('тренер расписание не правит', $r['status'] === 403, 'код ' . $r['status']);
+
 echo "\nЖурнал справочников\n";
 
 $kinds = $pdo->query("SELECT DISTINCT entity FROM audit_log")->fetchAll(PDO::FETCH_COLUMN);
 check('в журнале есть записи по справочникам',
       in_array('athlete', $kinds) && in_array('group', $kinds) && in_array('tariff', $kinds),
       implode(', ', $kinds));
+check('в журнале есть записи по расписанию',
+      in_array('schedule_rule', $kinds) && in_array('training', $kinds),
+      implode(', ', $kinds));
+
+$move = $pdo->query("SELECT reason FROM audit_log WHERE action = 'move' LIMIT 1")->fetchColumn();
+check('причина переноса записана', $move === 'Соревнования', 'причина: ' . $move);
 
 $why = $pdo->query("SELECT reason FROM audit_log WHERE action = 'anonymize' LIMIT 1")->fetchColumn();
 check('основание удаления записано', $why === 'Заявление родителя от 19.10', 'причина: ' . $why);

@@ -162,6 +162,64 @@ body.app{
 .empty{padding:38px 20px;text-align:center;color:var(--ink-45);font-size:15px}
 .loading{padding:38px 20px;text-align:center;color:var(--ink-45);font-size:15px}
 
+/* --- Неделя расписания ------------------------------------ */
+
+/* Семь равных колонок: auto-fit оставлял седьмой день
+   висеть отдельной строкой под остальными */
+.week{
+  display:grid;
+  gap:10px;
+  grid-template-columns:repeat(7,minmax(0,1fr));
+}
+@media (max-width:1000px){ .week{grid-template-columns:repeat(3,minmax(0,1fr))} }
+@media (max-width:760px){ .week{grid-template-columns:repeat(2,minmax(0,1fr))} }
+
+.day{
+  background:var(--white);
+  border-radius:var(--r);
+  box-shadow:0 1px 2px rgba(44,36,22,.05),0 6px 18px rgba(44,36,22,.04);
+  display:flex;
+  flex-direction:column;
+  min-height:120px;
+}
+.day.is-today{box-shadow:0 0 0 2px var(--blue),0 6px 18px rgba(44,36,22,.06)}
+
+.day__head{
+  padding:10px 12px;
+  border-bottom:1px solid var(--ink-12);
+}
+.day__head b{display:block;font-size:13.5px;font-weight:500}
+.day__head span{display:block;font-size:12.5px;color:var(--ink-45);margin-top:1px}
+
+.day__body{padding:8px;display:flex;flex-direction:column;gap:8px;flex:1}
+.day__empty{margin:auto 0;text-align:center;font-size:13px;color:var(--ink-45)}
+
+.tr{
+  padding:9px 10px;
+  border-radius:var(--r);
+  background:var(--sand);
+  border-left:2px solid var(--blue);
+  font-size:14px;
+}
+.tr--cancelled{border-left-color:var(--alarm);opacity:.72}
+.tr--moved{border-left-color:var(--ink-45);opacity:.72}
+.tr--held{border-left-color:var(--gold)}
+
+.tr__head{display:flex;align-items:baseline;gap:8px}
+.tr__time{font-weight:500;font-variant-numeric:tabular-nums}
+.tr__main{min-width:0}
+.tr__main b{font-weight:500}
+.tr__sub{display:block;font-size:12.5px;color:var(--ink-45);line-height:1.4;margin-top:1px}
+.tr__marks:not(:empty){margin-top:5px}
+.tr__why{
+  margin-top:5px;
+  font-size:12.5px;
+  color:var(--ink-70);
+  font-style:italic;
+}
+.tr__act{display:flex;flex-wrap:wrap;gap:10px;margin-top:7px}
+.tr__act .linkish{font-size:12.5px}
+
 /* --- Карточка записи -------------------------------------- */
 
 .back{
@@ -285,4 +343,19 @@ dialog.sheet::backdrop{background:rgba(15,28,36,.55)}
     font-size:13px;
   }
   .rows td.title{font-size:16px;font-weight:500;padding-bottom:4px}
+
+  /* Неделя на телефоне — в одну колонку: семь узких
+     столбцов рядом нечитаемы */
+  .week{grid-template-columns:1fr;gap:8px}
+  .day{min-height:0}
+  .day__head{display:flex;align-items:baseline;gap:8px}
+  .day__head span{margin-top:0}
+
+  /* Пустой день сворачивается в одну строку: иначе шесть
+     карточек «нет занятий» занимают весь экран и прячут
+     те дни, ради которых страницу и открыли */
+  .day.is-empty{flex-direction:row;align-items:baseline;opacity:.75}
+  .day.is-empty .day__head{border-bottom:0;flex:1}
+  .day.is-empty .day__body{padding:10px 12px}
+  .day.is-empty .day__empty{margin:0;font-size:12.5px}
 }

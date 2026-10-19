@@ -166,8 +166,32 @@ class Validate
         return $this;
     }
 
-    /** Месяц абонемента: 2026-11. */
-    public function period($field, $label, $required = true)
+    /**
+     * Время начала занятия: 09:30 или 09:30:00.
+     * Приводим к виду с секундами — столбец в базе TIME,
+     * и без этого сравнение «то же время» ломается
+     * на ровном месте.
+     */
+    public function time($field, $label, $required = true)
+    {
+        $value = trim((string) $this->raw($field));
+
+        if ($value === '') {
+            if ($this->needed($field, $required)) {
+                $this->fail($field, $label . ': заполните поле');
+            }
+            $this->clean[$field] = null;
+            return $this;
+        }
+        if (!preg_match('/^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/', $value, $m)) {
+            return $this->fail($field, $label . ': время в виде 09:30');
+        }
+
+        $this->clean[$field] = $m[1] . ':' . $m[2] . ':00';
+        return $this;
+    }
+
+    /** Месяц абонемента: 2026-11. */    public function period($field, $label, $required = true)
     {
         $value = trim((string) $this->raw($field));
 

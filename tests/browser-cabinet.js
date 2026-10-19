@@ -69,7 +69,7 @@ async function fillSheet(page, values, submitText) {
 
   await page.waitForSelector('.tab', { timeout: 8000 });
   const tabs = await page.locator('.tab').allTextContents();
-  check('администратору видны все разделы', tabs.length === 7, tabs.join(', '));
+  check('администратору видны все разделы', tabs.length === 8, tabs.join(', '));
   check('имя вошедшего в шапке',
         (await page.textContent('#who')).includes('Стефанова'), await page.textContent('#who'));
 
@@ -253,6 +253,90 @@ async function fillSheet(page, values, submitText) {
   check('цен в настройках больше нет',
         !(await page.textContent('.board')).includes('single_lesson_price'));
 
+  console.log('\nПлощадки и постоянное расписание');
+
+  await page.click('text=Добавить площадку');
+  await fillSheet(page, { name: 'Гололёд', address: 'ул. Свободы, 15' });
+  await page.waitForTimeout(700);
+  check('площадка добавлена', (await page.textContent('.page')).includes('Гололёд'));
+
+  await page.click('.tab:has-text("Группы")');
+  await page.waitForSelector('.head h1:has-text("Группы")');
+  await page.click('tr:has-text("СОГ-1")');
+  await page.waitForSelector('.head h1:has-text("СОГ-1")');
+  check('в карточке группы есть постоянное расписание',
+        (await page.textContent('.panes')).includes('Расписание не задано'),
+        await page.textContent('.panes'));
+
+  // Ближайший понедельник: иначе проверка зависит от дня запуска
+  const monday = await page.evaluate(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + ((8 - (d.getDay() || 7)) % 7 || 7));
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
+         + '-' + ('0' + d.getDate()).slice(-2);
+  });
+
+  await page.click('text=Добавить занятие');
+  await fillSheet(page, {
+    weekday: '1', time_start: '17:00', duration_min: '60',
+    kind: 'ice', valid_from: monday
+  });
+  await page.waitForTimeout(800);
+  check('занятие попало в постоянное расписание',
+        (await page.textContent('.panes')).includes('понедельник'),
+        await page.textContent('.panes'));
+  await page.screenshot({ path: OUT + '/cab-group-schedule.png' });
+
+  console.log('\nРасписание');
+
+  await page.click('.tab:has-text("Расписание")');
+  await page.waitForSelector('.head h1:has-text("Расписание")');
+  check('неделя показана целиком, включая пустые дни',
+        (await page.locator('.day').count()) === 7,
+        'дней: ' + (await page.locator('.day').count()));
+  check('пока занятий нет', (await page.textContent('.week')).includes('нет занятий'));
+
+  await page.click('text=Обновить расписание');
+  await fillSheet(page, { weeks: '4' });
+  await page.waitForTimeout(1000);
+
+  await page.goto(BASE + '/cabinet/#/schedule/' + monday, { waitUntil: 'load' });
+  await page.waitForSelector('.head h1:has-text("Расписание")', { timeout: 8000 });
+  await page.waitForTimeout(600);
+  check('занятие появилось в неделе',
+        (await page.locator('.tr').count()) === 1,
+        'занятий: ' + (await page.locator('.tr').count()));
+  check('видны время, группа и площадка',
+        (await page.textContent('.tr')).includes('17:00')
+        && (await page.textContent('.tr')).includes('СОГ-1')
+        && (await page.textContent('.tr')).includes('Гололёд'),
+        await page.textContent('.tr'));
+
+  await page.click('.tr button:has-text("Заменить тренера")');
+  await page.waitForSelector('dialog.sheet[open]');
+  await fillSheet(page, { reason: 'Болезнь' });
+  await page.waitForTimeout(900);
+  check('замена отмечена в карточке занятия',
+        (await page.textContent('.tr')).includes('замена'), await page.textContent('.tr'));
+
+  await page.click('.tr button:has-text("Перенести")');
+  await page.waitForSelector('dialog.sheet[open]');
+  await fillSheet(page, { time_start: '19:00', reason: 'Соревнования' });
+  await page.waitForTimeout(900);
+  const afterMove = await page.textContent('.week');
+  check('перенесённое занятие осталось с пометкой', afterMove.includes('перенесена'));
+  check('и появилось новое время', afterMove.includes('19:00'), afterMove.slice(0, 300));
+
+  await page.click('.tr:has-text("19:00") button:has-text("Отменить")');
+  await page.waitForSelector('dialog.sheet[open]');
+  await fillSheet(page, { reason: 'Заливка льда' });
+  await page.waitForTimeout(900);
+  check('отменённое занятие помечено и причина видна',
+        (await page.textContent('.week')).includes('отменена')
+        && (await page.textContent('.week')).includes('Заливка льда'),
+        await page.textContent('.week'));
+  await page.screenshot({ path: OUT + '/cab-schedule.png' });
+
   console.log('\nГраницы доступа тренера');
 
   await page.click('#out');
@@ -275,7 +359,18 @@ async function fillSheet(page, values, submitText) {
   await page.waitForSelector('.tab');
 
   const coachTabs = await page.locator('.tab').allTextContents();
-  check('тренеру видны только два раздела', coachTabs.length === 2, coachTabs.join(', '));
+  check('тренеру видны его три раздела', coachTabs.length === 3, coachTabs.join(', '));
+
+  await page.goto(BASE + '/cabinet/#/schedule/' + monday, { waitUntil: 'load' });
+  await page.waitForSelector('.head h1:has-text("Расписание")', { timeout: 8000 });
+  await page.waitForTimeout(600);
+  check('тренер видит расписание своей группы',
+        (await page.textContent('.week')).includes('СОГ-1'),
+        await page.textContent('.week'));
+  check('кнопки обновления расписания у тренера нет',
+        !(await page.isVisible('text=Обновить расписание')));
+  check('и кнопки отмены занятия тоже',
+        (await page.locator('.tr button:has-text("Отменить")').count()) === 0);
 
   await page.click('.tab:has-text("Группы")');
   // Ждём именно новый экран: на прежнем тоже есть .rows,
