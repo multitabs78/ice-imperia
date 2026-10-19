@@ -36,7 +36,8 @@ INSERT INTO settings (name, value, note) VALUES
   ('single_lesson_price',    '2500', 'Цена разового занятия, рубли. По ней считается перерасчёт по болезни и долг за месяц без абонемента'),
   ('illness_days_threshold', '14',   'С какого числа календарных дней болезни подряд возникает право на перерасчёт'),
   ('coach_edit_window_days', '3',    'Сколько суток тренер может править свои отметки посещений'),
-  ('schedule_horizon_weeks', '8',    'На сколько недель вперёд генерируются тренировки из постоянного расписания')
+  ('schedule_horizon_weeks', '8',    'На сколько недель вперёд генерируются тренировки из постоянного расписания'),
+  ('max_discount_percent',   '50',   'Предел суммарной скидки на один абонемент, проценты. Защита от случайного наложения скидок')
 ON DUPLICATE KEY UPDATE note = VALUES(note);
 
 
@@ -190,15 +191,41 @@ INSERT INTO venues (id, name, address) VALUES
   (1, 'Ледовая арена «Гололёд»', 'Санкт-Петербург, Красное Село, ул. Свободы, 15')
 ON DUPLICATE KEY UPDATE name = VALUES(name);
 
+-- Дополнительные занятия: зал, хореография и прочее, что идёт
+-- тем же днём, что и лёд, и в абонементе отдельным занятием
+-- не считается.
+--
+-- Время и количество таких занятий администратор правит через
+-- расписание (schedule_rules), название и стоимость — здесь.
+-- drop_in_price — фиксированная цена для спортсменов, у которых
+-- это занятие в абонемент не входит, но прийти они хотят.
+CREATE TABLE IF NOT EXISTS extra_classes (
+  id             INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  name           VARCHAR(190)  NOT NULL,
+  kind           ENUM('ice','gym','choreo') NOT NULL,
+  drop_in_price  DECIMAL(10,2) NOT NULL,
+  status         ENUM('active','archived') NOT NULL DEFAULT 'active',
+  created_at     DATETIME      NOT NULL,
+  PRIMARY KEY (id),
+  KEY ix_extra_classes_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Тарифы. price и sessions_count — не цена абонемента,
 -- а норматив, из которого выводится цена одного занятия.
 -- Тариф, по которому уже выдан абонемент, не меняется:
 -- изменение цены создаёт новую запись, старая уходит в архив.
+--
+-- days_per_week — вариант абонемента: сколько занятий в неделю
+-- он покрывает. У СОГ-2 два варианта, 3 и 4 занятия в неделю,
+-- то есть 12 и 16 в месяц. Если вариант меньше, чем занятий
+-- в расписании группы, администратор выбирает спортсмену дни
+-- (таблица subscription_slots). Пусто — все занятия группы.
 CREATE TABLE IF NOT EXISTS tariffs (
   id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
   name            VARCHAR(190)  NOT NULL,
   price           DECIMAL(10,2) NOT NULL,
   sessions_count  SMALLINT UNSIGNED NULL,
+  days_per_week   SMALLINT UNSIGNED NULL,
   kinds           VARCHAR(190)  NULL,
   status          ENUM('active','archived') NOT NULL DEFAULT 'active',
   created_by      INT UNSIGNED  NULL,
@@ -206,6 +233,54 @@ CREATE TABLE IF NOT EXISTS tariffs (
   PRIMARY KEY (id),
   KEY ix_tariffs_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Какие дополнительные занятия входят в тариф. Их стоимость
+-- уже заложена в цену абонемента, поэтому суммы здесь нет.
+-- Чего в этой таблице нет — спортсмен может посетить
+-- по фиксированной цене из extra_classes.drop_in_price.
+CREATE TABLE IF NOT EXISTS tariff_extras (
+  tariff_id       INT UNSIGNED NOT NULL,
+  extra_class_id  INT UNSIGNED NOT NULL,
+  PRIMARY KEY (tariff_id, extra_class_id),
+  KEY ix_tariff_extras_class (extra_class_id),
+  CONSTRAINT fk_tariff_extras_tariff FOREIGN KEY (tariff_id)
+    REFERENCES tariffs (id) ON DELETE CASCADE,
+  CONSTRAINT fk_tariff_extras_class FOREIGN KEY (extra_class_id)
+    REFERENCES extra_classes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Скидки. Справочник: новая скидка — это строка, а не правка кода.
+--
+-- condition определяет, как скидка находится:
+--   manual       — применяет администратор руками;
+--   second_child — автоматически, второму и следующим детям
+--                  одного родителя. Ставится на более дешёвые
+--                  абонементы месяца: самый дорогой идёт
+--                  по полной цене.
+-- Новое автоматическое условие — это одно значение здесь
+-- и одна функция в коде; всё остальное настраивается строкой.
+CREATE TABLE IF NOT EXISTS discounts (
+  id          INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  name        VARCHAR(190)  NOT NULL,
+  kind        ENUM('percent','amount') NOT NULL,
+  value       DECIMAL(10,2) NOT NULL,
+  cond        ENUM('manual','second_child') NOT NULL DEFAULT 'manual',
+  stackable   TINYINT(1)    NOT NULL DEFAULT 1,
+  sort        SMALLINT      NOT NULL DEFAULT 0,
+  valid_from  DATE          NULL,
+  valid_to    DATE          NULL,
+  status      ENUM('active','archived') NOT NULL DEFAULT 'active',
+  note        VARCHAR(255)  NULL,
+  created_by  INT UNSIGNED  NULL,
+  created_at  DATETIME      NOT NULL,
+  PRIMARY KEY (id),
+  KEY ix_discounts_status (status, cond)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO discounts (id, name, kind, value, cond, sort, note, created_at) VALUES
+  (1, 'Скидка на второго ребёнка', 'percent', 30, 'second_child', 10,
+   'Применяется ко всем абонементам семьи за месяц, кроме самого дорогого', NOW())
+ON DUPLICATE KEY UPDATE note = VALUES(note);
 
 -- groups — зарезервированное слово в MySQL 8, отсюда training_groups
 CREATE TABLE IF NOT EXISTS training_groups (
@@ -223,6 +298,27 @@ CREATE TABLE IF NOT EXISTS training_groups (
   KEY ix_training_groups_status (status),
   CONSTRAINT fk_training_groups_tariff FOREIGN KEY (tariff_id)
     REFERENCES tariffs (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Где действует скидка. Нет ни одной строки — действует везде.
+-- Отдельной таблицей, а не парой полей в discounts: скидка
+-- на три группы должна быть одной скидкой, иначе их правят
+-- по отдельности и они расходятся.
+CREATE TABLE IF NOT EXISTS discount_scopes (
+  discount_id  INT UNSIGNED NOT NULL,
+  group_id     INT UNSIGNED NULL,
+  tariff_id    INT UNSIGNED NULL,
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (id),
+  KEY ix_discount_scopes_discount (discount_id),
+  KEY ix_discount_scopes_group (group_id),
+  KEY ix_discount_scopes_tariff (tariff_id),
+  CONSTRAINT fk_discount_scopes_discount FOREIGN KEY (discount_id)
+    REFERENCES discounts (id) ON DELETE CASCADE,
+  CONSTRAINT fk_discount_scopes_group FOREIGN KEY (group_id)
+    REFERENCES training_groups (id) ON DELETE CASCADE,
+  CONSTRAINT fk_discount_scopes_tariff FOREIGN KEY (tariff_id)
+    REFERENCES tariffs (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Именно эта таблица определяет, что тренер считает «своим»
@@ -269,6 +365,7 @@ CREATE TABLE IF NOT EXISTS schedule_rules (
   time_start    TIME         NOT NULL,
   duration_min  SMALLINT UNSIGNED NOT NULL DEFAULT 60,
   kind          ENUM('ice','gym','choreo') NOT NULL,
+  extra_class_id INT UNSIGNED NULL,
   venue_id      INT UNSIGNED NOT NULL,
   coach_id      INT UNSIGNED NULL,
   valid_from    DATE         NOT NULL,
@@ -277,12 +374,15 @@ CREATE TABLE IF NOT EXISTS schedule_rules (
   created_at    DATETIME     NOT NULL,
   PRIMARY KEY (id),
   KEY ix_schedule_rules_group (group_id, weekday),
+  KEY ix_schedule_rules_extra (extra_class_id),
   CONSTRAINT fk_schedule_rules_group FOREIGN KEY (group_id)
     REFERENCES training_groups (id) ON DELETE CASCADE,
   CONSTRAINT fk_schedule_rules_venue FOREIGN KEY (venue_id)
     REFERENCES venues (id),
   CONSTRAINT fk_schedule_rules_coach FOREIGN KEY (coach_id)
-    REFERENCES coaches (id) ON DELETE SET NULL
+    REFERENCES coaches (id) ON DELETE SET NULL,
+  CONSTRAINT fk_schedule_rules_extra FOREIGN KEY (extra_class_id)
+    REFERENCES extra_classes (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Конкретные тренировки. Правило — шаблон, тренировка — факт:
@@ -290,6 +390,9 @@ CREATE TABLE IF NOT EXISTS schedule_rules (
 -- тренер, и к ней привязаны отметки посещений.
 -- Уникальность по группе, дате и времени — защита от повторного
 -- запуска генерации расписания.
+--
+-- extra_class_id пусто — основное занятие, оно считается
+-- в абонементе. Заполнено — дополнительное: зал, хореография.
 CREATE TABLE IF NOT EXISTS trainings (
   id                   INT UNSIGNED NOT NULL AUTO_INCREMENT,
   group_id             INT UNSIGNED NOT NULL,
@@ -297,6 +400,7 @@ CREATE TABLE IF NOT EXISTS trainings (
   time_start           TIME         NOT NULL,
   duration_min         SMALLINT UNSIGNED NOT NULL DEFAULT 60,
   kind                 ENUM('ice','gym','choreo') NOT NULL,
+  extra_class_id       INT UNSIGNED NULL,
   venue_id             INT UNSIGNED NOT NULL,
   coach_id             INT UNSIGNED NULL,
   status               ENUM('planned','held','cancelled','moved') NOT NULL DEFAULT 'planned',
@@ -310,8 +414,11 @@ CREATE TABLE IF NOT EXISTS trainings (
   KEY ix_trainings_date (date),
   KEY ix_trainings_coach (coach_id, date),
   KEY ix_trainings_moved (moved_to_training_id),
+  KEY ix_trainings_extra (extra_class_id),
   CONSTRAINT fk_trainings_group FOREIGN KEY (group_id)
     REFERENCES training_groups (id) ON DELETE CASCADE,
+  CONSTRAINT fk_trainings_extra FOREIGN KEY (extra_class_id)
+    REFERENCES extra_classes (id) ON DELETE SET NULL,
   CONSTRAINT fk_trainings_venue FOREIGN KEY (venue_id)
     REFERENCES venues (id),
   CONSTRAINT fk_trainings_coach FOREIGN KEY (coach_id)
@@ -331,20 +438,28 @@ CREATE TABLE IF NOT EXISTS trainings (
 -- и окончания не хранятся — они однозначно выводятся
 -- из period вида 2026-11.
 --
--- lesson_price и price фиксируются при выдаче: изменение
--- тарифа в декабре не должно менять сумму ноябрьского
+-- lesson_price, price_base и price фиксируются при выдаче:
+-- изменение тарифа в декабре не должно менять сумму ноябрьского
 -- абонемента.
+--
+-- price_base — до скидок, price — после. Обе суммы нужны: без
+-- первой в кабинете не объяснить, откуда взялась вторая.
+--
+-- Зачтённую перерасчётом сумму здесь не храним: она выводится
+-- из recalculations.to_subscription_id, и второй источник
+-- той же цифры рано или поздно разойдётся с первым.
 CREATE TABLE IF NOT EXISTS subscriptions (
   id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
   athlete_id      INT UNSIGNED  NOT NULL,
   group_id        INT UNSIGNED  NOT NULL,
   tariff_id       INT UNSIGNED  NOT NULL,
   period          CHAR(7)       NOT NULL,
+  date_from       DATE          NULL,
   sessions_total  SMALLINT UNSIGNED NOT NULL,
   sessions_bonus  SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   lesson_price    DECIMAL(10,2) NOT NULL,
+  price_base      DECIMAL(10,2) NOT NULL,
   price           DECIMAL(10,2) NOT NULL,
-  credit_in       DECIMAL(10,2) NOT NULL DEFAULT 0,
   status          ENUM('active','closed','cancelled') NOT NULL DEFAULT 'active',
   comment         VARCHAR(255)  NULL,
   created_by      INT UNSIGNED  NULL,
@@ -359,6 +474,51 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     REFERENCES training_groups (id),
   CONSTRAINT fk_subscriptions_tariff FOREIGN KEY (tariff_id)
     REFERENCES tariffs (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Выбранные дни посещения. Пусто — абонемент покрывает все
+-- основные занятия группы.
+--
+-- Нужна там, где у группы вариантов несколько: у СОГ-2
+-- четыре занятия в неделю по расписанию, и спортсмен
+-- с вариантом на три выбирает, в какие дни ходит. Выбор делает
+-- администратор, родителю он виден только как результат.
+--
+-- От этой таблицы зависит и список группы на тренировку: иначе
+-- тренер увидит на занятии тех, кто в этот день не ходит.
+CREATE TABLE IF NOT EXISTS subscription_slots (
+  subscription_id  INT UNSIGNED NOT NULL,
+  rule_id          INT UNSIGNED NOT NULL,
+  PRIMARY KEY (subscription_id, rule_id),
+  KEY ix_subscription_slots_rule (rule_id),
+  CONSTRAINT fk_subscription_slots_subscription FOREIGN KEY (subscription_id)
+    REFERENCES subscriptions (id) ON DELETE CASCADE,
+  CONSTRAINT fk_subscription_slots_rule FOREIGN KEY (rule_id)
+    REFERENCES schedule_rules (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Применённые скидки. kind, value и amount копируются
+-- из справочника на момент выдачи: правка скидки в справочнике
+-- не должна менять суммы выданных абонементов.
+CREATE TABLE IF NOT EXISTS subscription_discounts (
+  id               INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  subscription_id  INT UNSIGNED  NOT NULL,
+  discount_id      INT UNSIGNED  NULL,
+  name             VARCHAR(190)  NOT NULL,
+  kind             ENUM('percent','amount') NOT NULL,
+  value            DECIMAL(10,2) NOT NULL,
+  amount           DECIMAL(10,2) NOT NULL,
+  applied_auto     TINYINT(1)    NOT NULL DEFAULT 0,
+  comment          VARCHAR(255)  NULL,
+  created_by       INT UNSIGNED  NULL,
+  created_at       DATETIME      NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_subscription_discounts (subscription_id, discount_id),
+  KEY ix_subscription_discounts_discount (discount_id),
+  CONSTRAINT fk_subscription_discounts_subscription FOREIGN KEY (subscription_id)
+    REFERENCES subscriptions (id) ON DELETE CASCADE,
+  CONSTRAINT fk_subscription_discounts_discount FOREIGN KEY (discount_id)
+    REFERENCES discounts (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Перерасчёты. Заморозок в школе нет.
@@ -404,22 +564,71 @@ CREATE TABLE IF NOT EXISTS recalculations (
     REFERENCES subscriptions (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Оплаты. Платёжного шлюза пока нет: администратор отмечает,
--- что деньги получены. Задолженность не хранится, а считается.
-CREATE TABLE IF NOT EXISTS payments (
+-- Начисления: всё, что школа выставила спортсмену.
+--
+-- Источников денег стало три — абонементы, посещения без
+-- абонемента и дополнительные занятия по разовой цене, — и ещё
+-- перерасчёты, которые уходят в минус. Считать задолженность
+-- отдельной формулой по каждому источнику значит четыре раза
+-- повторить одну и ту же арифметику и однажды ошибиться в одной
+-- из них. Поэтому один реестр: долг = начисления минус оплаты.
+--
+-- Суммы здесь зафиксированы на момент начисления. Цена разового
+-- занятия изменится — выставленное раньше не пересчитается.
+--
+-- reversed_by: сторнирование. Ошибочное начисление не удаляется,
+-- а закрывается обратной записью, и обе остаются в истории.
+CREATE TABLE IF NOT EXISTS charges (
   id               INT UNSIGNED  NOT NULL AUTO_INCREMENT,
-  subscription_id  INT UNSIGNED  NOT NULL,
+  athlete_id       INT UNSIGNED  NOT NULL,
+  kind             ENUM('subscription','no_subscription','extra_drop_in','recalculation','correction') NOT NULL,
   amount           DECIMAL(10,2) NOT NULL,
-  method           ENUM('cash','transfer') NOT NULL,
-  paid_at          DATE          NOT NULL,
+  period           CHAR(7)       NOT NULL,
+  subscription_id  INT UNSIGNED  NULL,
+  training_id      INT UNSIGNED  NULL,
+  reversed_by      INT UNSIGNED  NULL,
   comment          VARCHAR(255)  NULL,
   created_by       INT UNSIGNED  NULL,
   created_at       DATETIME      NOT NULL,
   PRIMARY KEY (id),
-  KEY ix_payments_subscription (subscription_id),
-  KEY ix_payments_date (paid_at),
-  CONSTRAINT fk_payments_subscription FOREIGN KEY (subscription_id)
-    REFERENCES subscriptions (id) ON DELETE CASCADE
+  KEY ix_charges_athlete (athlete_id, period),
+  KEY ix_charges_subscription (subscription_id),
+  KEY ix_charges_training (training_id),
+  KEY ix_charges_reversed (reversed_by),
+  CONSTRAINT fk_charges_athlete FOREIGN KEY (athlete_id)
+    REFERENCES athletes (id) ON DELETE CASCADE,
+  CONSTRAINT fk_charges_subscription FOREIGN KEY (subscription_id)
+    REFERENCES subscriptions (id) ON DELETE SET NULL,
+  CONSTRAINT fk_charges_training FOREIGN KEY (training_id)
+    REFERENCES trainings (id) ON DELETE SET NULL,
+  CONSTRAINT fk_charges_reversed FOREIGN KEY (reversed_by)
+    REFERENCES charges (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Оплаты. Платёжного шлюза пока нет: администратор отмечает,
+-- что деньги получены. Задолженность не хранится, а считается
+-- как начисления минус оплаты.
+--
+-- charge_id пусто — оплата «в счёт будущего», аванс: деньги
+-- получены раньше, чем выставлен абонемент. Так бывает, и терять
+-- такую оплату нельзя.
+CREATE TABLE IF NOT EXISTS payments (
+  id          INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  athlete_id  INT UNSIGNED  NOT NULL,
+  charge_id   INT UNSIGNED  NULL,
+  amount      DECIMAL(10,2) NOT NULL,
+  method      ENUM('cash','transfer') NOT NULL,
+  paid_at     DATE          NOT NULL,
+  comment     VARCHAR(255)  NULL,
+  created_by  INT UNSIGNED  NULL,
+  created_at  DATETIME      NOT NULL,
+  PRIMARY KEY (id),
+  KEY ix_payments_athlete (athlete_id, paid_at),
+  KEY ix_payments_charge (charge_id),
+  CONSTRAINT fk_payments_athlete FOREIGN KEY (athlete_id)
+    REFERENCES athletes (id) ON DELETE CASCADE,
+  CONSTRAINT fk_payments_charge FOREIGN KEY (charge_id)
+    REFERENCES charges (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
