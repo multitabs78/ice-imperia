@@ -617,11 +617,26 @@ return function (Router $router) {
         $where  = $status === 'all' ? '' : ' WHERE status = ?';
         $params = $status === 'all' ? array() : array($status);
 
-        $rows  = Db::all('SELECT * FROM coaches' . $where . ' ORDER BY last_name, first_name', $params);
+        // Контакты лежат в учётной записи, а не в карточке
+        // тренера: без этого в списке у всех было пусто,
+        // и администратор не видел, какую почту сам же задал
+        $rows  = Db::all(
+            'SELECT c.*, u.phone AS u_phone, u.email AS u_email, u.status AS u_status,
+                    u.password_hash AS u_hash
+               FROM coaches c
+          LEFT JOIN users u ON u.id = c.user_id'
+            . ($status === 'all' ? '' : ' WHERE c.status = ?')
+            . ' ORDER BY c.last_name, c.first_name', $params);
+
         $items = array();
         foreach ($rows as $row) {
+            $row['phone'] = $row['u_phone'];
+            $row['email'] = $row['u_email'];
+
             $person = Dir::person($row);
-            $person['has_login'] = !empty($row['user_id']);
+            $person['has_login']  = !empty($row['user_id']);
+            $person['has_password'] = !empty($row['u_hash']);
+            $person['blocked']    = $row['u_status'] === 'blocked';
             $person['groups']    = Db::all(
                 'SELECT g.id, g.code, g.name FROM group_coaches gc
                    JOIN training_groups g ON g.id = gc.group_id
@@ -635,11 +650,19 @@ return function (Router $router) {
     /**
      * Создаёт тренера.
      *
-     * Три случая. Передали user_id — карточка привязывается
+     * Передали user_id — карточка привязывается
      * к существующей учётной записи: один человек бывает
      * и администратором, и тренером, и заводить ему второй
-     * вход незачем. Передали пароль — создаётся новая учётная
-     * запись. Не передали ничего — карточка без входа.
+     * вход незачем.
+     *
+     * Передали телефон или почту — заводится учётная запись.
+     * Пароль при этом необязателен: без него тренер входит
+     * по разовому коду. Раньше контакты в этом случае просто
+     * пропадали, а администратор, задавший почту, был уверен,
+     * что вход открыт.
+     *
+     * Не передали ничего — карточка без входа. Так тоже бывает:
+     * тренер, который кабинетом не пользуется.
      */
     $router->post('/coaches', function (Request $request) {
         Auth::require_admin();
@@ -670,24 +693,29 @@ return function (Router $router) {
             Dir::addRole($user['id'], 'coach');
             $userId = (int) $user['id'];
 
-        } elseif ($data['password'] !== null) {
-            if ($data['phone'] === null && $data['email'] === null) {
-                invalid(array('email' => 'Для входа нужен телефон или почта'));
-            }
+        } elseif ($data['phone'] !== null || $data['email'] !== null) {
             Dir::assertFree($data['phone'], $data['email']);
 
-            $userId = Repo::create('users', array(
-                'last_name'            => $data['last_name'],
-                'first_name'           => $data['first_name'],
-                'middle_name'          => $data['middle_name'],
-                'phone'                => $data['phone'],
-                'email'                => $data['email'],
-                'password_hash'        => password_hash($data['password'], PASSWORD_DEFAULT),
-                'must_change_password' => 1,
-                'status'               => 'active',
-                'created_at'           => Db::now(),
-            ), 'user');
+            $fields = array(
+                'last_name'   => $data['last_name'],
+                'first_name'  => $data['first_name'],
+                'middle_name' => $data['middle_name'],
+                'phone'       => $data['phone'],
+                'email'       => $data['email'],
+                'status'      => 'active',
+                'created_at'  => Db::now(),
+            );
+            if ($data['password'] !== null) {
+                $fields['password_hash']        = password_hash($data['password'], PASSWORD_DEFAULT);
+                $fields['must_change_password'] = 1;
+            }
+
+            $userId = Repo::create('users', $fields, 'user');
             Dir::addRole($userId, 'coach');
+
+        } elseif ($data['password'] !== null) {
+            // Пароль без контакта бесполезен: входить не по чему
+            invalid(array('email' => 'Для входа нужен телефон или почта'));
         }
 
         $id = Repo::create('coaches', array(
@@ -714,26 +742,118 @@ return function (Router $router) {
             ->text('last_name', 'Фамилия', 'present', 80)
             ->text('first_name', 'Имя', 'present', 80)
             ->text('middle_name', 'Отчество', false, 80)
+            ->phone('phone', 'Телефон', false)
+            ->email('email', 'Почта', false)
             ->one_of('status', 'Состояние', array('active', 'archived'), false)
             ->done();
 
         $changes = array();
-        foreach ($data as $key => $value) {
-            if ($value !== null) {
-                $changes[$key] = $value;
+        foreach (array('last_name', 'first_name', 'middle_name', 'status') as $field) {
+            if (isset($data[$field])) {
+                $changes[$field] = $data[$field];
             }
         }
 
+        Db::begin();
+
         $saved = Repo::save('coaches', $coach['id'], $changes, 'coach',
                             $request->input('reason'));
+
+        // Контакты живут в учётной записи. Если её нет,
+        // а контакт задали — заводим: раньше такая правка
+        // молча ничего не меняла и отвечала «сохранено»
+        if ($data['phone'] !== null || $data['email'] !== null) {
+            Dir::assertFree($data['phone'], $data['email'], $coach['user_id']);
+
+            if ($coach['user_id']) {
+                $touch = array();
+                if ($data['phone'] !== null) { $touch['phone'] = $data['phone']; }
+                if ($data['email'] !== null) { $touch['email'] = $data['email']; }
+                Repo::save('users', $coach['user_id'], $touch, 'user',
+                           $request->input('reason'));
+            } else {
+                $userId = Repo::create('users', array(
+                    'last_name'   => isset($changes['last_name'])
+                                     ? $changes['last_name'] : $coach['last_name'],
+                    'first_name'  => isset($changes['first_name'])
+                                     ? $changes['first_name'] : $coach['first_name'],
+                    'middle_name' => $coach['middle_name'],
+                    'phone'       => $data['phone'],
+                    'email'       => $data['email'],
+                    'status'      => 'active',
+                    'created_at'  => Db::now(),
+                ), 'user');
+                Dir::addRole($userId, 'coach');
+                Db::update('coaches', $coach['id'], array('user_id' => $userId));
+                $coach['user_id'] = $userId;
+            }
+        }
 
         // Архивный тренер не должен продолжать входить в кабинет
         if (isset($changes['status']) && $changes['status'] === 'archived' && $coach['user_id']) {
             Db::update('users', $coach['user_id'], array('status' => 'blocked'));
             Auth::revoke_all($coach['user_id']);
         }
+        // А возвращённый из архива — должен
+        if (isset($changes['status']) && $changes['status'] === 'active' && $coach['user_id']) {
+            Db::update('users', $coach['user_id'], array('status' => 'active'));
+        }
 
-        Response::ok(Dir::person($saved));
+        Db::commit();
+
+        $out = Dir::person(Repo::find('coaches', $coach['id']));
+        if ($coach['user_id']) {
+            $user = Repo::find('users', $coach['user_id']);
+            $out['phone'] = $user['phone'];
+            $out['email'] = $user['email'];
+        }
+        $out['has_login'] = !empty($coach['user_id']);
+        Response::ok($out);
+    });
+
+    /**
+     * Задать или сбросить пароль тренеру.
+     *
+     * Без этого тренер, заведённый без пароля или забывший
+     * его, оставался снаружи навсегда: сменить пароль можно
+     * было только зная старый.
+     */
+    $router->post('/coaches/{id}/password', function (Request $request, $params) {
+        Auth::require_admin();
+        $coach = Repo::find('coaches', $params['id'], 'Тренер');
+
+        $data = (new Validate($request->body))
+            ->text('password', 'Временный пароль', true, 200, 8)
+            ->done();
+
+        if (!$coach['user_id']) {
+            conflict('no_login',
+                'У этого тренера нет учётной записи. Сначала укажите телефон или почту');
+        }
+
+        $user = Repo::find('users', $coach['user_id'], 'Учётная запись');
+        if (!$user['phone'] && !$user['email']) {
+            conflict('no_contact',
+                'Не задан телефон или почта — входить будет не по чему');
+        }
+
+        Db::begin();
+        Db::update('users', $user['id'], array(
+            'password_hash'        => password_hash($data['password'], PASSWORD_DEFAULT),
+            'must_change_password' => 1,
+            'status'               => 'active',
+        ));
+        // Старые входы закрываем: пароль меняют и тогда,
+        // когда он попал не в те руки
+        Auth::revoke_all($user['id']);
+        Audit::write('set_password', 'coach', $coach['id'], null, null,
+                     $request->input('reason'));
+        Db::commit();
+
+        Response::ok(array(
+            'login' => $user['email'] ? $user['email'] : $user['phone'],
+            'must_change_password' => true,
+        ));
     });
 
     /**

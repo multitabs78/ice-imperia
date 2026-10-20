@@ -1120,12 +1120,26 @@
 
       var rows = items.map(function (c) {
         var groups = (c.groups || []).map(function (g) { return g.code; }).join(', ');
+
+        // Состояние входа в трёх словах: без них администратор
+        // не отличит «пароль не задан» от «вход закрыт»
+        var access;
+        if (!c.has_login) {
+          access = el('span', { class: 'pill pill--warn' }, 'без входа');
+        } else if (c.blocked) {
+          access = el('span', { class: 'pill pill--warn' }, 'вход закрыт');
+        } else if (!c.has_password) {
+          access = el('span', { class: 'pill pill--warn' }, 'пароль не задан');
+        } else {
+          access = el('span', { class: 'pill' }, 'вход есть');
+        }
+
         return el('tr', { class: 'is-flat' }, [
           el('td', { class: 'title' }, c.name),
+          el('td', { class: 'dim', 'data-label': 'Контакты' },
+             [c.phone, c.email].filter(Boolean).join(' · ') || '—'),
           el('td', { class: 'dim', 'data-label': 'Группы' }, groups || '—'),
-          el('td', null, c.has_login
-            ? el('span', { class: 'pill' }, 'есть вход')
-            : el('span', { class: 'pill pill--warn' }, 'без входа')),
+          el('td', null, access),
           el('td', null, c.status === 'archived'
             ? el('span', { class: 'pill pill--off' }, 'в архиве') : ''),
           el('td', { class: 'act' }, [
@@ -1133,14 +1147,22 @@
                onclick: function () { editCoach(c); } }, 'Изменить'),
              document.createTextNode(' '),
              el('button', { class: 'linkish',
+               onclick: function () { coachPassword(c); } },
+               c.has_password ? 'Сбросить пароль' : 'Задать пароль'),
+             document.createTextNode(' '),
+             el('button', { class: 'linkish',
                onclick: function () { handover(c); } }, 'Передать группы')
            ])
         ]);
       });
 
+      box.appendChild(el('p', { class: 'field__note', text:
+        'Чтобы тренер мог войти, у него должны быть телефон или почта и пароль. '
+        + 'Временный пароль система попросит заменить при первом входе.' }));
+
       box.appendChild(board([table([
-        { title: 'Фамилия и имя' }, { title: 'Группы' }, { title: 'Вход' },
-        { title: '' }, { title: '', class: 'act' }
+        { title: 'Фамилия и имя' }, { title: 'Контакты' }, { title: 'Группы' },
+        { title: 'Вход' }, { title: '' }, { title: '', class: 'act' }
       ], rows)]));
     });
   }
@@ -1167,10 +1189,12 @@
           { name: 'middle_name', label: 'Отчество, если есть' },
           { name: 'user_id', label: 'Учётная запись', type: 'select', options: accounts },
           { name: 'phone', label: 'Телефон', placeholder: '+7 999 000 00 00',
-            hint: 'Телефон, почта и пароль нужны только для новой учётной записи' },
+            hint: 'Телефон или почта — то, по чему тренер входит в кабинет. '
+                + 'Без них получится карточка без доступа' },
           { name: 'email', label: 'Почта' },
           { name: 'password', label: 'Временный пароль', type: 'text',
-            hint: 'Не короче восьми символов. Пусто — тренер пока без входа в кабинет' }
+            hint: 'Не короче восьми символов. Оставите пустым — тренер сможет войти '
+                + 'по разовому коду, а пароль вы зададите позже' }
         ],
         onSubmit: function (values) {
           if (values.user_id) {
@@ -1232,11 +1256,15 @@
   function editCoach(c) {
     openSheet({
       title: 'Изменить тренера',
-      note: 'Перевод в архив закрывает и вход в кабинет.',
+      note: 'Телефон или почта — то, по чему тренер входит в кабинет. '
+          + 'Перевод в архив вход закрывает, возврат — открывает.',
       fields: [
         { name: 'last_name', label: 'Фамилия', value: c.last_name },
         { name: 'first_name', label: 'Имя', value: c.first_name },
         { name: 'middle_name', label: 'Отчество', value: c.middle_name },
+        { name: 'phone', label: 'Телефон', value: c.phone,
+          placeholder: '+7 999 000 00 00' },
+        { name: 'email', label: 'Почта', value: c.email },
         { name: 'status', label: 'Состояние', type: 'select', value: c.status, options: [
           { value: 'active', label: 'работает' },
           { value: 'archived', label: 'в архиве' }
@@ -1248,6 +1276,34 @@
           toast('Сохранено');
           screenCoaches();
         });
+      }
+    });
+  }
+
+  /** Задать или сбросить тренеру пароль. */
+  function coachPassword(c) {
+    if (!c.has_login) {
+      toast('Сначала укажите тренеру телефон или почту — через «Изменить»', true);
+      return;
+    }
+
+    openSheet({
+      title: c.has_password ? 'Сбросить пароль' : 'Задать пароль',
+      note: c.name + '. Пароль временный: при первом входе система попросит заменить '
+          + 'его на свой. Прежние входы закроются.',
+      submit: 'Сохранить',
+      fields: [
+        { name: 'password', label: 'Временный пароль', type: 'text',
+          hint: 'Не короче восьми символов. Передайте его тренеру лично' },
+        { name: 'reason', label: 'Основание', placeholder: 'Забыл пароль' }
+      ],
+      onSubmit: function (values) {
+        return api('POST', '/coaches/' + c.id + '/password', values)
+          .then(function (answer) {
+            if (!answer.ok) { return answer; }
+            toast('Готово. Вход: ' + answer.data.login);
+            screenCoaches();
+          });
       }
     });
   }

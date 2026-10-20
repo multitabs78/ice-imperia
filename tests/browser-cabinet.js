@@ -121,9 +121,30 @@ async function fillSheet(page, values, submitText) {
     email: 'coach@example.test', password: 'coachpass123'
   });
   await page.waitForTimeout(700);
-  check('тренер создан и видно, что у него есть вход',
-        (await page.textContent('.board')).includes('Филь')
-        && (await page.textContent('.board')).includes('есть вход'));
+  const coachRow = await page.textContent('.board');
+  check('тренер создан и видно, что вход у него есть',
+        coachRow.includes('Филь') && coachRow.includes('вход есть'), coachRow);
+  check('и видна почта, по которой он входит',
+        coachRow.includes('coach@example.test'), coachRow);
+
+  // Самый частый промах: контакт задали, пароль забыли
+  await page.click('text=Добавить тренера');
+  await fillSheet(page, {
+    last_name: 'Безпароля', first_name: 'Олег', email: 'nopass@example.test'
+  });
+  await page.waitForTimeout(900);
+  check('без пароля состояние названо прямо',
+        (await page.textContent('.board')).includes('пароль не задан'),
+        await page.textContent('.board'));
+
+  await page.click('tr:has-text("Безпароля") button:has-text("Задать пароль")');
+  await page.waitForSelector('dialog.sheet[open]');
+  await fillSheet(page, { password: 'freshpass123', reason: 'Выдали доступ' });
+  await page.waitForTimeout(900);
+  check('после выдачи пароля вход появился',
+        (await page.textContent('tr:has-text("Безпароля")')).includes('вход есть'),
+        await page.textContent('tr:has-text("Безпароля")'));
+  await page.screenshot({ path: OUT + '/cab-coaches.png' });
 
   await page.click('.tab:has-text("Группы")');
   await page.waitForSelector('.head h1:has-text("Группы")');
@@ -134,6 +155,11 @@ async function fillSheet(page, values, submitText) {
         (await page.textContent('.head h1')).includes('СОГ-1'), await page.textContent('.head h1'));
 
   await page.click('text=Закрепить тренера');
+  // Выбираем именно Филя: по умолчанию в списке первый
+  // по алфавиту, а тренеров в школе уже несколько
+  await page.waitForSelector('dialog.sheet[open]');
+  await page.locator('dialog.sheet [name=coach_id]')
+            .selectOption({ label: 'Филь Всеволод' });
   await fillSheet(page, { role: 'main' });
   await page.waitForTimeout(700);
   check('тренер закреплён за группой',
@@ -467,6 +493,8 @@ async function fillSheet(page, values, submitText) {
 
   await page.click('.head__act button:has-text("Заменить тренера")');
   await page.waitForSelector('dialog.sheet[open]');
+  await page.locator('dialog.sheet [name=coach_id]')
+            .selectOption({ label: 'Стефанова Анастасия' });
   await fillSheet(page, { reason: 'Болезнь' });
   await page.waitForTimeout(900);
   check('замена отмечена на карточке',

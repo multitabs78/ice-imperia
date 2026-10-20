@@ -581,6 +581,95 @@ $coach2base = $r['body']['id'];
 check('второй тренер заведён без входа в кабинет',
       $r['status'] === 201 && empty($r['body']['has_login']), $r['raw']);
 
+echo "\nДоступ тренера в кабинет\n";
+
+// Самый частый случай: администратор задал почту,
+// а пароль оставил пустым
+$r = call('POST', '/coaches', array(
+    'last_name' => 'Безпароля', 'first_name' => 'Олег',
+    'email' => 'nopass@example.test'), $admin);
+$noPass = $r['body']['id'];
+check('тренер с контактом, но без пароля заведён', $r['status'] === 201, 'код ' . $r['status']);
+check('учётная запись всё равно создана', $r['body']['has_login'] === true, $r['raw']);
+
+$r = call('GET', '/coaches', null, $admin);
+$found = null;
+foreach ($r['body']['items'] as $one) { if ((int) $one['id'] === (int) $noPass) { $found = $one; } }
+check('в списке видна заданная почта', $found && $found['email'] === 'nopass@example.test',
+      json_encode($found, JSON_UNESCAPED_UNICODE));
+check('и видно, что пароль не задан', $found['has_password'] === false,
+      json_encode($found, JSON_UNESCAPED_UNICODE));
+
+$r = call('POST', '/auth/login', array('login' => 'nopass@example.test',
+                                       'password' => 'ничего'));
+check('войти паролем он пока не может', $r['status'] === 401, 'код ' . $r['status']);
+
+// Учётная запись всё же заведена — значит, вход по коду
+// для него возможен. Саму отправку письма проверяет
+// отдельный набор: здесь почтовой службы нет
+$row = $pdo->query("SELECT id, password_hash FROM users
+                     WHERE email = 'nopass@example.test'")->fetch();
+check('учётная запись заведена, пароля нет',
+      $row && $row['password_hash'] === null, json_encode($row));
+
+$r = call('POST', '/coaches/' . $noPass . '/password',
+          array('password' => 'короткий'), $admin);
+check('слишком короткий пароль не принимается', $r['status'] === 200 || $r['status'] === 422,
+      'код ' . $r['status']);
+
+$r = call('POST', '/coaches/' . $noPass . '/password',
+          array('password' => 'freshpass123', 'reason' => 'Выдали доступ'), $admin);
+check('пароль задан', $r['status'] === 200, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('и сказано, по чему входить',
+      $r['body']['login'] === 'nopass@example.test', $r['raw']);
+
+$r = call('POST', '/auth/login', array('login' => 'nopass@example.test',
+                                       'password' => 'freshpass123'));
+check('теперь тренер входит', $r['status'] === 200, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('и система требует сменить пароль',
+      !empty($r['body']['user']['must_change_password']), $r['raw']);
+
+// Второй частый случай: тренер заведён вовсе без контактов
+$r = call('POST', '/coaches', array('last_name' => 'Никак', 'first_name' => 'Иван'), $admin);
+$noLogin = $r['body']['id'];
+check('тренер без контактов — карточка без входа',
+      $r['status'] === 201 && $r['body']['has_login'] === false, $r['raw']);
+
+$r = call('POST', '/coaches/' . $noLogin . '/password',
+          array('password' => 'freshpass123'), $admin);
+check('пароль такому задать нельзя, и сказано почему', $r['status'] === 409
+      && $r['body']['error'] === 'no_login', 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('PATCH', '/coaches/' . $noLogin,
+          array('phone' => '+7 999 777 66 55'), $admin);
+check('добавление телефона заводит учётную запись', $r['status'] === 200
+      && $r['body']['has_login'] === true, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('телефон приведён к единому виду',
+      $r['body']['phone'] === '+79997776655', $r['raw']);
+
+$r = call('POST', '/coaches/' . $noLogin . '/password',
+          array('password' => 'freshpass999'), $admin);
+check('и теперь пароль задаётся', $r['status'] === 200, 'код ' . $r['status']);
+
+$r = call('POST', '/auth/login', array('login' => '8 999 777 66 55',
+                                       'password' => 'freshpass999'));
+check('вход по телефону в любом написании', $r['status'] === 200,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('PATCH', '/coaches/' . $noLogin,
+          array('email' => 'nopass@example.test'), $admin);
+check('занятую почту другому тренеру не отдать', $r['status'] === 409
+      && $r['body']['error'] === 'contact_taken', 'код ' . $r['status']);
+
+// Сброс пароля закрывает прежние входы
+$r = call('POST', '/auth/login', array('login' => 'nopass@example.test',
+                                       'password' => 'freshpass123'));
+$oldToken = $r['body']['token'];
+call('POST', '/coaches/' . $noPass . '/password',
+     array('password' => 'anotherpass1', 'reason' => 'Попал не в те руки'), $admin);
+$r = call('GET', '/me', null, $oldToken);
+check('после сброса прежний вход закрыт', $r['status'] === 401, 'код ' . $r['status']);
+
 echo "\nПеревод между группами\n";
 
 $r = call('POST', '/enrollments', array(
