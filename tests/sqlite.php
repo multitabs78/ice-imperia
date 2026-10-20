@@ -32,6 +32,14 @@ class SqliteTestDb
 
         foreach ($files as $file) {
             foreach (self::statements(file_get_contents($file)) as $sql) {
+                // MODIFY COLUMN SQLite не умеет вовсе. Там, где
+                // столбец становится необязательным, пересобираем
+                // таблицу: без этого тесты не увидели бы того,
+                // что на MySQL работает
+                if (preg_match('/^@@RELAX@@\s+(\w+)\s+(\w+)$/', $sql, $m)) {
+                    self::relax($pdo, $m[1], $m[2]);
+                    continue;
+                }
                 try {
                     $pdo->exec($sql);
                 } catch (PDOException $error) {
@@ -75,6 +83,23 @@ class SqliteTestDb
                 return 'SELECT 1';
             }
 
+            // ADD KEY — это индекс, а не столбец. Пишем его
+            // отдельной командой, как того и хочет SQLite
+            if (preg_match('/^ALTER\s+TABLE\s+(\S+)\s+ADD\s+(?:KEY|INDEX)\s+(\w+)\s*\((.+)\)\s*$/is',
+                           $sql, $m)) {
+                return 'CREATE INDEX IF NOT EXISTS ' . $m[2] . ' ON ' . $m[1] . ' (' . $m[3] . ')';
+            }
+
+            // MODIFY COLUMN, снимающий обязательность, отмечаем
+            // для пересборки таблицы. Остальные изменения типа
+            // SQLite и так переживёт: типы в нём необязательны
+            if (preg_match('/^ALTER\s+TABLE\s+(\w+)\s+MODIFY\s+COLUMN\s+(\w+)\s+(.*)$/is',
+                           $sql, $m)) {
+                return preg_match('/\bNOT\s+NULL\b/i', $m[3])
+                    ? 'SELECT 1'
+                    : '@@RELAX@@ ' . $m[1] . ' ' . $m[2];
+            }
+
             if (preg_match('/^(ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN\s+`?\w+`?)\s+(.*)$/is', $sql, $m)) {
                 // AFTER <столбец> SQLite не понимает, а тип нужно перевести
                 $rest = preg_replace('/\s+AFTER\s+`?\w+`?\s*$/i', '', $m[2]);
@@ -90,6 +115,51 @@ class SqliteTestDb
         $sql = preg_replace('/\bNOW\(\)/i', "datetime('now')", $sql);
 
         return trim($sql);
+    }
+
+    /**
+     * Снимает NOT NULL со столбца, пересобирая таблицу.
+     *
+     * В SQLite иначе никак: таблица создаётся заново без этого
+     * ограничения, данные переливаются, старая убирается.
+     * Внешние ключи на время отключаем — иначе перелив упрётся
+     * в ссылки, которые через мгновение снова станут верными.
+     */
+    private static function relax(PDO $pdo, $table, $column)
+    {
+        $sql = $pdo->query("SELECT sql FROM sqlite_master WHERE type = 'table'
+                             AND name = " . $pdo->quote($table))->fetchColumn();
+        if (!$sql) {
+            return;
+        }
+
+        // Убираем NOT NULL ровно у нужного столбца
+        $fixed = preg_replace(
+            '/(^\s*' . preg_quote($column, '/') . '\s+[^,\n]*?)\s+NOT\s+NULL/im',
+            '$1', $sql, 1);
+        if ($fixed === $sql) {
+            return;
+        }
+
+        $names = array();
+        foreach ($pdo->query('PRAGMA table_info(' . $table . ')') as $one) {
+            $names[] = $one['name'];
+        }
+        $list = implode(', ', $names);
+
+        $pdo->exec('PRAGMA foreign_keys = OFF');
+        // Без legacy_alter_table SQLite при переименовании
+        // перепишет ссылки на эту таблицу в чужих внешних
+        // ключах — и они станут указывать на временное имя,
+        // которое мы через мгновение удалим
+        $pdo->exec('PRAGMA legacy_alter_table = ON');
+        $pdo->exec('ALTER TABLE ' . $table . ' RENAME TO ' . $table . '__old');
+        $pdo->exec(preg_replace('/\b' . preg_quote($table, '/') . '\b/', $table, $fixed, 1));
+        $pdo->exec('INSERT INTO ' . $table . ' (' . $list . ') SELECT ' . $list
+                 . ' FROM ' . $table . '__old');
+        $pdo->exec('DROP TABLE ' . $table . '__old');
+        $pdo->exec('PRAGMA legacy_alter_table = OFF');
+        $pdo->exec('PRAGMA foreign_keys = ON');
     }
 
     /**

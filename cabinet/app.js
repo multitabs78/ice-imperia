@@ -415,13 +415,28 @@
         el('dt', null, 'Дата рождения'), el('dd', null, dateRu(a.birth_date)),
         el('dt', null, 'Возраст'), el('dd', null,
           a.age === null ? '—' : a.age + ' ' + plural(a.age, 'год', 'года', 'лет')),
+        el('dt', null, 'Зачислен'), el('dd', null, dateRu(a.joined_at)),
         el('dt', null, 'Состояние'), el('dd', null,
-          a.status === 'active' ? 'занимается' : 'в архиве')
+          a.status === 'active' ? 'занимается'
+            : 'отчислен' + (a.left_at ? ' ' + dateRu(a.left_at) : ''))
       ]);
       if (a.note) {
         facts.appendChild(el('dt', null, 'Заметка'));
         facts.appendChild(el('dd', null, a.note));
       }
+
+      var sport = el('dl', { class: 'facts' }, [
+        el('dt', null, 'Разряд'), el('dd', null, a.rank_name || 'не присвоен'),
+        el('dt', null, 'Присвоен'), el('dd', null, dateRu(a.rank_date)),
+        el('dt', null, 'Документ'), el('dd', null, a.rank_doc || '—')
+      ]);
+
+      // Сроки с запасом в днях: без него «до 29 ноября»
+      // ничего не говорит, пока не посчитаешь в уме
+      var terms = el('dl', { class: 'facts' }, [
+        el('dt', null, 'Медосмотр до'), el('dd', null, termCell(a.medical_until, a.medical_left)),
+        el('dt', null, 'Страховка до'), el('dd', null, termCell(a.insurance_until, a.insurance_left))
+      ]);
 
       var groupsPane = el('div', { class: 'pane' }, [
         el('h2', null, 'Группы')
@@ -498,30 +513,267 @@
       }
 
       box.appendChild(el('div', { class: 'panes' }, [
-        el('div', null, [el('div', { class: 'pane' }, [el('h2', null, 'Сведения'), facts]), groupsPane]),
+        el('div', null, [
+          el('div', { class: 'pane' }, [el('h2', null, 'Сведения'), facts]),
+          el('div', { class: 'pane' }, [el('h2', null, 'Разряд'), sport]),
+          el('div', { class: 'pane' }, [el('h2', null, 'Допуски'), terms]),
+          groupsPane,
+          soloPane(a)
+        ]),
         right
       ]));
     });
   }
 
+  /** Срок с понятным запасом: «до 29.11.2026, осталось 40 дней». */
+  function termCell(until, left) {
+    if (!until) {
+      return el('span', { class: 'dim' }, 'не заполнено');
+    }
+    var box = el('span', null, [dateRu(until), ' ']);
+
+    if (left < 0) {
+      box.appendChild(el('span', { class: 'pill pill--warn' },
+        'просрочен ' + Math.abs(left) + ' ' + plural(Math.abs(left), 'день', 'дня', 'дней')));
+    } else if (left <= 30) {
+      box.appendChild(el('span', { class: 'pill pill--warn' },
+        'осталось ' + left + ' ' + plural(left, 'день', 'дня', 'дней')));
+    } else {
+      box.appendChild(el('span', { class: 'pill' },
+        left + ' ' + plural(left, 'день', 'дня', 'дней')));
+    }
+    return box;
+  }
+
   function editAthlete(a) {
-    openSheet({
-      title: 'Изменить спортсмена',
-      fields: [
-        { name: 'last_name', label: 'Фамилия', value: a.last_name },
-        { name: 'first_name', label: 'Имя', value: a.first_name },
-        { name: 'middle_name', label: 'Отчество', value: a.middle_name },
-        { name: 'birth_date', label: 'Дата рождения', type: 'date', value: a.birth_date },
-        { name: 'note', label: 'Заметка', value: a.note },
-        { name: 'status', label: 'Состояние', type: 'select', value: a.status, options: [
-          { value: 'active', label: 'занимается' },
-          { value: 'archived', label: 'в архиве' }
-        ] }
-      ],
-      onSubmit: function (values) {
-        return api('PATCH', '/athletes/' + a.id, values).then(function (answer) {
+    api('GET', '/ranks').then(function (answer) {
+      var ranks = [{ value: '', label: 'не присвоен' }].concat(
+        (answer.data.items || []).map(function (r) {
+          return { value: r.id, label: r.name };
+        }));
+
+      openSheet({
+        title: 'Изменить спортсмена',
+        fields: [
+          { name: 'last_name', label: 'Фамилия', value: a.last_name },
+          { name: 'first_name', label: 'Имя', value: a.first_name },
+          { name: 'middle_name', label: 'Отчество', value: a.middle_name },
+          { name: 'birth_date', label: 'Дата рождения', type: 'date', value: a.birth_date },
+          { name: 'joined_at', label: 'Дата зачисления', type: 'date', value: a.joined_at },
+          { name: 'rank_id', label: 'Разряд', type: 'select',
+            value: a.rank_id || '', options: ranks },
+          { name: 'rank_date', label: 'Дата присвоения', type: 'date', value: a.rank_date },
+          { name: 'rank_doc', label: 'Номер документа о присвоении', value: a.rank_doc,
+            placeholder: 'Приказ № 114-с' },
+          { name: 'medical_until', label: 'Медицинский допуск до', type: 'date',
+            value: a.medical_until },
+          { name: 'insurance_until', label: 'Страховка до', type: 'date',
+            value: a.insurance_until },
+          { name: 'note', label: 'Заметка', value: a.note },
+          { name: 'status', label: 'Состояние', type: 'select', value: a.status, options: [
+            { value: 'active', label: 'занимается' },
+            { value: 'archived', label: 'отчислен' }
+          ] }
+        ],
+        onSubmit: function (values) {
+          if (!values.rank_id) { delete values.rank_id; }
+          // Отчисление ставит дату само, если её не указали:
+          // archived без даты оставил бы дыру в отчёте
+          if (values.status === 'archived' && !a.left_at) {
+            values.left_at = isoDate(new Date());
+          }
+          return api('PATCH', '/athletes/' + a.id, values).then(function (result) {
+            if (!result.ok) { return result; }
+            toast('Сохранено');
+            screenAthlete(a.id);
+          });
+        }
+      });
+    });
+  }
+
+  /* --- Индивидуальные занятия спортсмена ------------------- */
+
+  function soloPane(a) {
+    var pane = el('div', { class: 'pane' }, [
+      el('h2', null, 'Индивидуальные занятия'),
+      el('p', { class: 'field__note', text:
+        'Занятия с этим спортсменом отдельно от группы. Разовое ставится на дату, '
+        + 'постоянное повторяется каждую неделю.' })
+    ]);
+
+    var body = el('div');
+    pane.appendChild(body);
+
+    if (can(['admin'])) {
+      pane.appendChild(el('div', { class: 'sheet__act' }, [
+        el('button', { class: 'btn btn--ghost btn--small',
+          onclick: function () { newSoloOnce(a); } }, 'Разовое'),
+        el('button', { class: 'btn btn--ghost btn--small',
+          onclick: function () { newSoloRule(a); } }, 'Постоянное')
+      ]));
+    }
+
+    Promise.all([
+      api('GET', '/athletes/' + a.id + '/schedule'),
+      // Две недели назад тоже показываем: недавнее прошедшее
+      // занятие чаще всего и нужно — его забыли отметить
+      api('GET', '/trainings?from=' + shiftDays(isoDate(new Date()), -14)
+          + '&to=' + shiftDays(isoDate(new Date()), 30))
+    ]).then(function (results) {
+      var rules = (results[0].data && results[0].data.items) || [];
+      var soon = ((results[1].data && results[1].data.items) || [])
+        .filter(function (t) { return t.athlete_id === a.id; });
+
+      clear(body);
+
+      if (!rules.length && !soon.length) {
+        body.appendChild(el('p', { class: 'empty', text: 'Индивидуальных занятий нет' }));
+        return;
+      }
+
+      rules.forEach(function (r) {
+        var line = el('div', { class: 'line' }, [
+          el('div', { class: 'line__main' }, [
+            el('span', null, DAYS_EVERY[r.weekday] + ', ' + r.time_start),
+            el('span', { class: 'line__sub' }, placeOf(r))
+          ])
+        ]);
+        if (can(['admin'])) {
+          line.appendChild(el('button', {
+            class: 'linkish linkish--danger line__act',
+            onclick: function () { closeSoloRule(a, r); }
+          }, 'Убрать'));
+        }
+        body.appendChild(line);
+      });
+
+      soon.slice(0, 10).forEach(function (t) {
+        var mark = null;
+        if (t.status === 'cancelled') {
+          mark = el('span', { class: 'pill pill--warn' }, 'отменено');
+        } else if (t.status === 'held') {
+          mark = el('span', { class: 'pill' }, 'проведено');
+        } else if (t.date < isoDate(new Date())) {
+          mark = el('span', { class: 'pill pill--warn' }, 'не отмечено');
+        }
+
+        body.appendChild(el('div', { class: 'line' }, [
+          el('div', { class: 'line__main' }, [
+            el('a', { class: 'linkish', href: '#/training/' + t.id },
+               dayTitle(t.date) + ', ' + t.time_start),
+            el('span', { class: 'line__sub' }, placeOf(t))
+          ]),
+          mark
+        ]));
+      });
+    });
+
+    return pane;
+  }
+
+  /** Поля, общие для разового и постоянного занятия. */
+  function soloFields(spots, coaches, kinds) {
+    return [
+      { name: 'kind_id', label: 'Вид занятия', type: 'select', options: kinds },
+      { name: 'spot_id', label: 'Где', type: 'select', options: spots },
+      { name: 'coach_id', label: 'Тренер', type: 'select', options: coaches },
+      { name: 'duration_min', label: 'Длительность, минут', type: 'number', value: 45 }
+    ];
+  }
+
+  function soloRefs() {
+    return Promise.all([
+      api('GET', '/venues'), api('GET', '/coaches'), api('GET', '/lesson-kinds')
+    ]).then(function (results) {
+      return {
+        spots: spotOptions(results[0].data.items || []),
+        coaches: [{ value: '', label: 'не назначен' }].concat(
+          (results[1].data.items || []).map(function (c) {
+            return { value: c.id, label: c.name };
+          })),
+        kinds: (results[2].data.items || []).map(function (k) {
+          return { value: k.id, label: k.name };
+        })
+      };
+    });
+  }
+
+  function newSoloOnce(a) {
+    soloRefs().then(function (refs) {
+      if (!refs.spots.length) {
+        toast('Сначала заведите площадку в настройках', true);
+        return;
+      }
+
+      openSheet({
+        title: 'Разовое занятие',
+        note: a.name + '. Одно занятие на выбранную дату.',
+        submit: 'Поставить',
+        fields: [
+          { name: 'date', label: 'Дата', type: 'date', value: isoDate(new Date()) },
+          { name: 'time_start', label: 'Время начала', type: 'time', value: '15:00' }
+        ].concat(soloFields(refs.spots, refs.coaches, refs.kinds)),
+        onSubmit: function (values) {
+          if (!values.coach_id) { delete values.coach_id; }
+          values.athlete_id = a.id;
+          return api('POST', '/trainings', values).then(function (answer) {
+            if (!answer.ok) { return answer; }
+            toast('Занятие поставлено');
+            screenAthlete(a.id);
+          });
+        }
+      });
+    });
+  }
+
+  function newSoloRule(a) {
+    soloRefs().then(function (refs) {
+      if (!refs.spots.length) {
+        toast('Сначала заведите площадку в настройках', true);
+        return;
+      }
+
+      var days = [];
+      for (var i = 1; i <= 7; i++) { days.push({ value: i, label: DAYS[i] }); }
+
+      openSheet({
+        title: 'Постоянное индивидуальное занятие',
+        note: a.name + '. Это шаблон: чтобы он превратился в занятия, нажмите '
+            + '«Обновить расписание» в разделе «Расписание».',
+        submit: 'Добавить',
+        fields: [
+          { name: 'weekday', label: 'День недели', type: 'select', options: days },
+          { name: 'time_start', label: 'Время начала', type: 'time', value: '15:00' }
+        ].concat(soloFields(refs.spots, refs.coaches, refs.kinds)).concat([
+          { name: 'valid_from', label: 'Действует с', type: 'date',
+            value: isoDate(new Date()) }
+        ]),
+        onSubmit: function (values) {
+          if (!values.coach_id) { delete values.coach_id; }
+          return api('POST', '/athletes/' + a.id + '/schedule', values)
+            .then(function (answer) {
+              if (!answer.ok) { return answer; }
+              toast('Добавлено. Теперь обновите расписание');
+              screenAthlete(a.id);
+            });
+        }
+      });
+    });
+  }
+
+  function closeSoloRule(a, r) {
+    confirmWithReason({
+      title: 'Убрать индивидуальное занятие',
+      note: 'Каждый ' + r.weekday_name + ', ' + r.time_start
+          + '. Прошедшие занятия останутся, будущие запланированные — уберутся.',
+      submit: 'Убрать',
+      onConfirm: function (why) {
+        return api('DELETE', '/schedule-rules/' + r.id + '?from=' + isoDate(new Date())
+                   + '&reason=' + encodeURIComponent(why)).then(function (answer) {
           if (!answer.ok) { return answer; }
-          toast('Сохранено');
+          toast(answer.data.removed
+            ? 'Убрано, снято занятий: ' + answer.data.removed : 'Убрано');
           screenAthlete(a.id);
         });
       }
@@ -1226,6 +1478,23 @@
 
   var DAYS = ['', 'понедельник', 'вторник', 'среда', 'четверг',
               'пятница', 'суббота', 'воскресенье'];
+
+  // «каждый среда» — не по-русски, а род дня недели в коде
+  // выводить незачем: проще держать вторую форму
+  var DAYS_EVERY = ['', 'по понедельникам', 'по вторникам', 'по средам', 'по четвергам',
+                    'по пятницам', 'по субботам', 'по воскресеньям'];
+
+  /**
+   * Где проходит занятие, без повторов: у площадки «Лёд»
+   * и вида «Лёд» получалось бы «Лёд · Лёд».
+   */
+  function placeOf(t) {
+    var parts = [];
+    if (t.kind_name) { parts.push(t.kind_name); }
+    if (t.spot_name && t.spot_name !== t.kind_name) { parts.push(t.spot_name); }
+    if (t.coach_name) { parts.push(t.coach_name); }
+    return parts.join(' · ');
+  }
   var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
                 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 
@@ -1347,9 +1616,10 @@
       el('span', { class: 'tr__time' }, t.time_start),
       el('span', { class: 'tr__spot' }, t.spot_name || t.kind_name)
     ]));
-    card.appendChild(el('b', { class: 'tr__group' }, t.group_code));
+    card.appendChild(el('b', { class: 'tr__group' }, t.title));
     card.appendChild(el('span', { class: 'tr__sub' },
       t.coach_name || 'тренер не назначен'));
+
 
     var marks = el('div', { class: 'tr__marks' });
     if (t.substitute) { marks.appendChild(el('span', { class: 'pill' }, 'замена')); }
@@ -1364,6 +1634,9 @@
     }
     if (t.status === 'planned' && t.date < isoDate(new Date())) {
       marks.appendChild(el('span', { class: 'pill pill--warn' }, 'не отмечена'));
+    }
+    if (t.personal) {
+      marks.appendChild(el('span', { class: 'pill' }, 'индивидуальное'));
     }
     card.appendChild(marks);
 
@@ -1423,7 +1696,7 @@
   function cancelTraining(t) {
     confirmWithReason({
       title: 'Отменить занятие',
-      note: t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start
+      note: t.title + ', ' + dayTitle(t.date) + ', ' + t.time_start
           + '. Занятие останется в расписании с пометкой об отмене — школа должна его '
           + 'перенести или вернуть бонусным.',
       submit: 'Отменить занятие',
@@ -1441,7 +1714,7 @@
   function moveTraining(t) {
     openSheet({
       title: 'Перенести занятие',
-      note: t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start
+      note: t.title + ', ' + dayTitle(t.date) + ', ' + t.time_start
           + '. На прежнем месте останется отметка о переносе со ссылкой на новое время.',
       submit: 'Перенести',
       fields: [
@@ -1472,7 +1745,7 @@
 
       openSheet({
         title: 'Заменить тренера',
-        note: t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start
+        note: t.title + ', ' + dayTitle(t.date) + ', ' + t.time_start
             + '. Занятие проведёт другой тренер — и оно засчитается ему, а не '
             + (t.coach_name || 'прежнему'),
         submit: 'Назначить',
@@ -1517,9 +1790,8 @@
       rules.forEach(function (r) {
         var line = el('div', { class: 'line' }, [
           el('div', { class: 'line__main' }, [
-            el('span', null, r.weekday_name + ', ' + r.time_start),
-            el('span', { class: 'line__sub' },
-               [r.kind_name, r.venue_name, r.coach_name].filter(Boolean).join(' · '))
+            el('span', null, DAYS_EVERY[r.weekday] + ', ' + r.time_start),
+            el('span', { class: 'line__sub' }, placeOf(r))
           ])
         ]);
         if (can(['admin'])) {
@@ -1555,7 +1827,8 @@
   }
 
   function newRule(g) {
-    Promise.all([api('GET', '/venues'), api('GET', '/coaches')]).then(function (results) {
+    Promise.all([api('GET', '/venues'), api('GET', '/coaches'),
+                 api('GET', '/lesson-kinds')]).then(function (results) {
       var venues = spotOptions(results[0].data.items || []);
       if (!venues.length) {
         toast('Сначала заведите площадку в настройках', true);
@@ -1565,6 +1838,9 @@
         (results[1].data.items || []).map(function (c) {
           return { value: c.id, label: c.name };
         }));
+      var kinds = (results[2].data.items || []).map(function (k) {
+        return { value: k.id, label: k.name };
+      });
 
       var days = [];
       for (var i = 1; i <= 7; i++) { days.push({ value: i, label: DAYS[i] }); }
@@ -1578,11 +1854,7 @@
           { name: 'weekday', label: 'День недели', type: 'select', options: days },
           { name: 'time_start', label: 'Время начала', type: 'time', value: '17:00' },
           { name: 'duration_min', label: 'Длительность, минут', type: 'number', value: 60 },
-          { name: 'kind', label: 'Вид занятия', type: 'select', options: [
-            { value: 'ice', label: 'лёд' },
-            { value: 'gym', label: 'зал' },
-            { value: 'choreo', label: 'хореография' }
-          ] },
+          { name: 'kind_id', label: 'Вид занятия', type: 'select', options: kinds },
           { name: 'spot_id', label: 'Где', type: 'select', options: venues },
           { name: 'coach_id', label: 'Тренер', type: 'select', options: coaches },
           { name: 'valid_from', label: 'Действует с', type: 'date',
@@ -1607,12 +1879,16 @@
    * и затевается — уволился тренер, пришёл новый.
    */
   function editRule(g, r) {
-    Promise.all([api('GET', '/venues'), api('GET', '/coaches')]).then(function (results) {
+    Promise.all([api('GET', '/venues'), api('GET', '/coaches'),
+                 api('GET', '/lesson-kinds')]).then(function (results) {
       var spots = spotOptions(results[0].data.items || []);
       var coaches = [{ value: '', label: 'не менять' }].concat(
         (results[1].data.items || []).map(function (c) {
           return { value: c.id, label: c.name };
         }));
+      var kinds = (results[2].data.items || []).map(function (k) {
+        return { value: k.id, label: k.name };
+      });
 
       var days = [];
       for (var i = 1; i <= 7; i++) { days.push({ value: i, label: DAYS[i] }); }
@@ -1627,11 +1903,8 @@
           { name: 'time_start', label: 'Время начала', type: 'time', value: r.time_start },
           { name: 'duration_min', label: 'Длительность, минут', type: 'number',
             value: r.duration_min },
-          { name: 'kind', label: 'Вид занятия', type: 'select', value: r.kind, options: [
-            { value: 'ice', label: 'лёд' },
-            { value: 'gym', label: 'зал' },
-            { value: 'choreo', label: 'хореография' }
-          ] },
+          { name: 'kind_id', label: 'Вид занятия', type: 'select',
+            value: r.kind_id, options: kinds },
           { name: 'spot_id', label: 'Где', type: 'select', value: r.spot_id, options: spots },
           { name: 'coach_id', label: 'Тренер', type: 'select', value: r.coach_id || '',
             options: coaches },
@@ -1706,9 +1979,8 @@
       var box = clear(page);
 
       box.appendChild(backLink('schedule/' + t.date, 'Расписание'));
-      box.appendChild(heading(t.group_code + ', ' + dayTitle(t.date) + ', ' + t.time_start,
-        [t.spot_name || t.kind_name, t.coach_name || 'тренер не назначен']
-          .filter(Boolean).join(' · '),
+      box.appendChild(heading(t.title + ', ' + dayTitle(t.date) + ', ' + t.time_start,
+        placeOf(t) || 'тренер не назначен',
         trainingActions(t)));
 
       var state = el('div', { class: 'tr__marks' });
@@ -2205,7 +2477,111 @@
       ], rows)]));
 
       box.appendChild(venuesPane());
+      box.appendChild(listPane({
+        title: 'Виды занятий',
+        note: 'Чем занимаются: лёд, зал, хореография, ОФП. Выбирается при заполнении '
+            + 'расписания.',
+        path: '/lesson-kinds',
+        add: 'Добавить вид',
+        label: function (one) { return one.name; },
+        sub: function (one) {
+          return (one.on_ice ? 'на льду' : 'вне льда')
+               + (one.in_use ? ' · используется' : '');
+        },
+        fields: function (one) {
+          return [
+            { name: 'name', label: 'Название', value: one ? one.name : '' },
+            { name: 'on_ice', label: 'Проходит на льду', type: 'checkbox',
+              value: one ? one.on_ice : false },
+            { name: 'sort', label: 'Порядок в списке', type: 'number',
+              value: one ? one.sort : 100 }
+          ];
+        }
+      }));
+      box.appendChild(listPane({
+        title: 'Разряды',
+        note: 'Список из спортивной классификации. Присваивается в карточке спортсмена.',
+        path: '/ranks',
+        add: 'Добавить разряд',
+        label: function (one) { return one.name; },
+        sub: function (one) { return one.status === 'archived' ? 'в архиве' : ''; },
+        fields: function (one) {
+          return [
+            { name: 'name', label: 'Название', value: one ? one.name : '' },
+            { name: 'sort', label: 'Порядок в списке', type: 'number',
+              value: one ? one.sort : 100 }
+          ];
+        }
+      }));
     });
+  }
+
+  /**
+   * Простой справочник: список, добавление, правка.
+   *
+   * Виды занятий и разряды устроены одинаково, и писать два
+   * почти одинаковых экрана значило бы чинить потом каждую
+   * мелочь дважды.
+   */
+  function listPane(spec) {
+    var pane = el('div', { class: 'pane' }, [
+      el('h2', null, spec.title),
+      el('p', { class: 'field__note', text: spec.note })
+    ]);
+
+    var body = el('div');
+    pane.appendChild(body);
+
+    function edit(one) {
+      openSheet({
+        title: one ? 'Изменить' : spec.add,
+        fields: spec.fields(one).concat(one ? [
+          { name: 'status', label: 'Состояние', type: 'select', value: one.status, options: [
+            { value: 'active', label: 'используется' },
+            { value: 'archived', label: 'в архиве' }
+          ] },
+          { name: 'reason', label: 'Основание', placeholder: 'Для журнала' }
+        ] : []),
+        onSubmit: function (values) {
+          var where = one ? spec.path + '/' + one.id : spec.path;
+          return api(one ? 'PATCH' : 'POST', where, values).then(function (answer) {
+            if (!answer.ok) { return answer; }
+            toast('Сохранено');
+            screenSettings();
+          });
+        }
+      });
+    }
+
+    pane.appendChild(el('div', { class: 'sheet__act' }, [
+      el('button', { class: 'btn btn--ghost btn--small',
+        onclick: function () { edit(null); } }, spec.add)
+    ]));
+
+    api('GET', spec.path + '?status=all').then(function (answer) {
+      var items = (answer.data && answer.data.items) || [];
+      clear(body);
+
+      if (!items.length) {
+        body.appendChild(el('p', { class: 'empty', text: 'Пусто' }));
+        return;
+      }
+      items.forEach(function (one) {
+        var sub = spec.sub(one);
+        body.appendChild(el('div', { class: 'line' }, [
+          el('div', { class: 'line__main' }, [
+            el('span', null, spec.label(one)),
+            sub ? el('span', { class: 'line__sub' }, sub) : null
+          ]),
+          one.status === 'archived'
+            ? el('span', { class: 'pill pill--off' }, 'в архиве') : null,
+          el('button', { class: 'linkish line__act',
+            onclick: function () { edit(one); } }, 'Изменить')
+        ]));
+      });
+    });
+
+    return pane;
   }
 
   /**

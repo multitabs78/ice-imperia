@@ -228,18 +228,29 @@ class Auth
         }
 
         $coachId = self::coach_id();
-        if (!$coachId) {
-            return false;
+        if ($coachId) {
+            return (bool) Db::value(
+                'SELECT 1
+                   FROM trainings t
+              LEFT JOIN group_coaches gc ON gc.group_id = t.group_id AND gc.coach_id = ?
+                  WHERE t.id = ? AND (t.coach_id = ? OR gc.coach_id IS NOT NULL)
+                  LIMIT 1',
+                array($coachId, (int) $trainingId, $coachId)
+            );
         }
 
-        return (bool) Db::value(
-            'SELECT 1
-               FROM trainings t
-          LEFT JOIN group_coaches gc ON gc.group_id = t.group_id AND gc.coach_id = ?
-              WHERE t.id = ? AND (t.coach_id = ? OR gc.coach_id IS NOT NULL)
-              LIMIT 1',
-            array($coachId, (int) $trainingId, $coachId)
-        );
+        // Родитель и спортсмен видят занятие, если оно касается
+        // их самих: групповое — по составу группы, личное —
+        // по спортсмену
+        $row = Db::row('SELECT group_id, athlete_id FROM trainings WHERE id = ?',
+                       array((int) $trainingId));
+        if (!$row) {
+            return false;
+        }
+        if ($row['athlete_id']) {
+            return self::sees_athlete($row['athlete_id']);
+        }
+        return $row['group_id'] ? self::sees_group($row['group_id']) : false;
     }
 
     public static function require_training($trainingId)

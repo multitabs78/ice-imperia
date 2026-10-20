@@ -77,9 +77,23 @@ class Marks
         return null;
     }
 
-    /** Состав группы на день занятия. */
-    public static function roster($groupId, $date)
+    /**
+     * Кого отмечать на занятии.
+     *
+     * У группового — состав на день занятия: кто занимался
+     * тогда, тот и должен быть в списке. У индивидуального —
+     * один человек, ради которого оно и назначено.
+     */
+    public static function roster($training)
     {
+        if (!empty($training['athlete_id'])) {
+            return Db::all(
+                'SELECT id, last_name, first_name, middle_name, birth_date
+                   FROM athletes WHERE id = ?',
+                array((int) $training['athlete_id'])
+            );
+        }
+
         return Db::all(
             'SELECT a.id, a.last_name, a.first_name, a.middle_name, a.birth_date
                FROM enrollments e
@@ -87,7 +101,7 @@ class Marks
               WHERE e.group_id = ? AND e.date_from <= ?
                 AND (e.date_to IS NULL OR e.date_to >= ?)
               ORDER BY a.last_name, a.first_name',
-            array((int) $groupId, $date, $date)
+            array((int) $training['group_id'], $training['date'], $training['date'])
         );
     }
 
@@ -144,7 +158,7 @@ return function (Router $router) {
         $marks    = Marks::of($training['id']);
 
         $items = array();
-        foreach (Marks::roster($training['group_id'], $training['date']) as $one) {
+        foreach (Marks::roster($training) as $one) {
             $id = (int) $one['id'];
             $items[] = array(
                 'athlete_id' => $id,
@@ -209,7 +223,7 @@ return function (Router $router) {
 
         $already = Marks::of($training['id']);
         $roster  = array();
-        foreach (Marks::roster($training['group_id'], $training['date']) as $one) {
+        foreach (Marks::roster($training) as $one) {
             $roster[(int) $one['id']] = true;
         }
 
@@ -429,11 +443,12 @@ return function (Router $router) {
         $to   = date('Y-m-t', strtotime($from));
 
         $trainings = Db::all(
-            'SELECT id, date, time_start, kind, status
-               FROM trainings
-              WHERE group_id = ? AND date BETWEEN ? AND ?
-                AND status <> ?
-              ORDER BY date, time_start',
+            'SELECT t.id, t.date, t.time_start, t.status, lk.name AS kind_name
+               FROM trainings t
+          LEFT JOIN lesson_kinds lk ON lk.id = t.kind_id
+              WHERE t.group_id = ? AND t.date BETWEEN ? AND ?
+                AND t.status <> ?
+              ORDER BY t.date, t.time_start',
             array((int) $params['id'], $from, $to, 'moved')
         );
 
@@ -466,7 +481,7 @@ return function (Router $router) {
                 'date'        => $one['date'],
                 'day'         => (int) date('j', strtotime($one['date'])),
                 'time_start'  => substr($one['time_start'], 0, 5),
-                'kind'        => $one['kind'],
+                'kind_name'   => $one['kind_name'],
                 'status'      => $one['status'],
             );
         }
@@ -519,10 +534,12 @@ return function (Router $router) {
         }
 
         $rows = Db::all(
-            'SELECT at.*, t.date, t.time_start, t.kind, g.code AS group_code
+            'SELECT at.*, t.date, t.time_start, t.athlete_id AS personal,
+                    lk.name AS kind_name, g.code AS group_code
                FROM attendance at
-               JOIN trainings t       ON t.id = at.training_id
-               JOIN training_groups g ON g.id = t.group_id
+               JOIN trainings t          ON t.id = at.training_id
+          LEFT JOIN training_groups g    ON g.id = t.group_id
+          LEFT JOIN lesson_kinds lk      ON lk.id = t.kind_id
               WHERE at.athlete_id = ? AND t.date BETWEEN ? AND ?
               ORDER BY t.date, t.time_start',
             array((int) $params['id'], $from, $to)
@@ -536,8 +553,10 @@ return function (Router $router) {
             $mark = Marks::mark($row);
             $mark['date']        = $row['date'];
             $mark['time_start']  = substr($row['time_start'], 0, 5);
-            $mark['kind']        = $row['kind'];
-            $mark['group_code']  = $row['group_code'];
+            $mark['kind_name']   = $row['kind_name'];
+            $mark['group_code']  = $row['group_code']
+                                   ? $row['group_code'] : 'индивидуальное';
+            $mark['personal']    = !empty($row['personal']);
             $mark['training_id'] = (int) $row['training_id'];
             $items[] = $mark;
 

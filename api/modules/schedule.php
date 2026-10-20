@@ -23,7 +23,18 @@ class Sched
         5 => 'пятница', 6 => 'суббота', 7 => 'воскресенье',
     );
 
-    public static $kinds = array('ice' => 'лёд', 'gym' => 'зал', 'choreo' => 'хореография');
+    /** Вид занятия по id. Перечень теперь в справочнике. */
+    public static function kind($kindId)
+    {
+        $row = Db::row('SELECT * FROM lesson_kinds WHERE id = ?', array((int) $kindId));
+        if (!$row) {
+            not_found('Вид занятия не найден');
+        }
+        if ($row['status'] !== 'active') {
+            conflict('kind_archived', 'Этот вид занятия убран из справочника');
+        }
+        return $row;
+    }
 
     /** Правило для выдачи наружу. */
     public static function rule($row)
@@ -37,12 +48,15 @@ class Sched
                               ? self::$days[(int) $row['weekday']] : '',
             'time_start'   => substr($row['time_start'], 0, 5),
             'duration_min' => (int) $row['duration_min'],
-            'kind'         => $row['kind'],
-            'kind_name'    => isset(self::$kinds[$row['kind']]) ? self::$kinds[$row['kind']] : $row['kind'],
+            'kind_id'      => empty($row['kind_id']) ? null : (int) $row['kind_id'],
+            'kind_name'    => isset($row['kind_name']) ? $row['kind_name'] : null,
             'venue_id'     => (int) $row['venue_id'],
             'venue_name'   => isset($row['venue_name']) ? $row['venue_name'] : null,
             'spot_id'      => empty($row['spot_id']) ? null : (int) $row['spot_id'],
             'spot_name'    => isset($row['spot_name']) ? $row['spot_name'] : null,
+            'athlete_id'   => empty($row['athlete_id']) ? null : (int) $row['athlete_id'],
+            'athlete_name' => isset($row['athlete_name']) ? $row['athlete_name'] : null,
+            'personal'     => !empty($row['athlete_id']),
             'coach_id'     => $row['coach_id'] === null ? null : (int) $row['coach_id'],
             'coach_name'   => isset($row['coach_name']) ? $row['coach_name'] : null,
             'valid_from'   => $row['valid_from'],
@@ -56,15 +70,23 @@ class Sched
     {
         return array(
             'id'           => (int) $row['id'],
-            'group_id'     => (int) $row['group_id'],
+            'group_id'     => empty($row['group_id']) ? null : (int) $row['group_id'],
             'group_code'   => isset($row['group_code']) ? $row['group_code'] : null,
             'group_name'   => isset($row['group_name']) ? $row['group_name'] : null,
+            'athlete_id'   => empty($row['athlete_id']) ? null : (int) $row['athlete_id'],
+            'athlete_name' => isset($row['athlete_name']) ? $row['athlete_name'] : null,
+            'personal'     => !empty($row['athlete_id']),
+            // Чем занятие подписать в расписании: группой или
+            // именем, если оно индивидуальное
+            'title'        => !empty($row['athlete_id']) && isset($row['athlete_name'])
+                              ? $row['athlete_name']
+                              : (isset($row['group_code']) ? $row['group_code'] : ''),
             'date'         => $row['date'],
             'weekday'      => (int) date('N', strtotime($row['date'])),
             'time_start'   => substr($row['time_start'], 0, 5),
             'duration_min' => (int) $row['duration_min'],
-            'kind'         => $row['kind'],
-            'kind_name'    => isset(self::$kinds[$row['kind']]) ? self::$kinds[$row['kind']] : $row['kind'],
+            'kind_id'      => empty($row['kind_id']) ? null : (int) $row['kind_id'],
+            'kind_name'    => isset($row['kind_name']) ? $row['kind_name'] : null,
             'venue_id'     => (int) $row['venue_id'],
             'venue_name'   => isset($row['venue_name']) ? $row['venue_name'] : null,
             'spot_id'      => empty($row['spot_id']) ? null : (int) $row['spot_id'],
@@ -87,13 +109,17 @@ class Sched
         return Db::all(
             'SELECT t.*, g.code AS group_code, g.name AS group_name,
                     v.name AS venue_name, sp.name AS spot_name, sp.kind AS spot_kind,
+                    lk.name AS kind_name,
+                    a.last_name AS a_last, a.first_name AS a_first,
                     c.last_name AS c_last, c.first_name AS c_first, c.middle_name AS c_middle,
                     (SELECT COUNT(*) FROM group_coaches gc
                       WHERE gc.group_id = t.group_id AND gc.coach_id = t.coach_id) AS own_coach
                FROM trainings t
-               JOIN training_groups g ON g.id = t.group_id
+          LEFT JOIN training_groups g ON g.id = t.group_id
                JOIN venues v          ON v.id = t.venue_id
           LEFT JOIN spots sp          ON sp.id = t.spot_id
+          LEFT JOIN lesson_kinds lk   ON lk.id = t.kind_id
+          LEFT JOIN athletes a        ON a.id = t.athlete_id
           LEFT JOIN coaches c         ON c.id = t.coach_id
              WHERE ' . $where . '
              ORDER BY ' . $order . '
@@ -113,6 +139,11 @@ class Sched
               ))
             : null;
 
+        $row['athlete_name'] = isset($row['a_last']) && $row['a_last']
+            ? Repo::fullName(array('last_name' => $row['a_last'],
+                                   'first_name' => $row['a_first']))
+            : null;
+
         // Ведёт не закреплённый за группой — значит, замена
         $row['substitute'] = $row['coach_id'] !== null && (int) $row['own_coach'] === 0;
 
@@ -124,11 +155,15 @@ class Sched
     {
         $row = Db::row(
             'SELECT r.*, v.name AS venue_name, sp.name AS spot_name, g.code AS group_code,
+                    lk.name AS kind_name,
+                    a.last_name AS a_last, a.first_name AS a_first,
                     c.last_name AS c_last, c.first_name AS c_first, c.middle_name AS c_middle
                FROM schedule_rules r
                JOIN venues v          ON v.id = r.venue_id
           LEFT JOIN spots sp          ON sp.id = r.spot_id
-               JOIN training_groups g ON g.id = r.group_id
+          LEFT JOIN lesson_kinds lk   ON lk.id = r.kind_id
+          LEFT JOIN training_groups g ON g.id = r.group_id
+          LEFT JOIN athletes a        ON a.id = r.athlete_id
           LEFT JOIN coaches c         ON c.id = r.coach_id
               WHERE r.id = ?',
             array((int) $id)
@@ -139,8 +174,30 @@ class Sched
         $row['coach_name'] = $row['c_last'] ? Repo::fullName(array(
             'last_name' => $row['c_last'], 'first_name' => $row['c_first'],
             'middle_name' => $row['c_middle'])) : null;
+        $row['athlete_name'] = $row['a_last'] ? Repo::fullName(array(
+            'last_name' => $row['a_last'], 'first_name' => $row['a_first'])) : null;
 
         return self::rule($row);
+    }
+
+    /**
+     * Есть ли уже занятие у этой группы или у этого спортсмена
+     * в то же время. Уникальный ключ в базе здесь не помогает:
+     * у личных занятий group_id пустой, а два пустых значения
+     * база считает разными.
+     */
+    public static function slotTaken($groupId, $athleteId, $date, $start, $exceptId = null)
+    {
+        if ($groupId) {
+            return Db::value(
+                'SELECT id FROM trainings
+                  WHERE group_id = ? AND date = ? AND time_start = ? AND id <> ?',
+                array((int) $groupId, $date, $start, (int) $exceptId));
+        }
+        return Db::value(
+            'SELECT id FROM trainings
+              WHERE athlete_id = ? AND date = ? AND time_start = ? AND id <> ?',
+            array((int) $athleteId, $date, $start, (int) $exceptId));
     }
 
     /**
@@ -169,7 +226,8 @@ class Sched
 
         $coachId = Auth::coach_id();
         if ($coachId) {
-            // Свои группы плюс тренировки, на которые назначили заменять
+            // Свои группы плюс тренировки, на которые назначили
+            // заменять. Личное занятие видит тот, кто его ведёт
             return array(
                 '(t.coach_id = ? OR t.group_id IN
                     (SELECT group_id FROM group_coaches WHERE coach_id = ?))',
@@ -180,21 +238,24 @@ class Sched
         $userId = Auth::id();
         if (Auth::has('parent')) {
             return array(
-                't.group_id IN (SELECT e.group_id FROM enrollments e
-                                  JOIN parent_athlete pa ON pa.athlete_id = e.athlete_id
-                                 WHERE pa.parent_user_id = ?
-                                   AND (e.date_to IS NULL OR e.date_to >= ?))',
-                array($userId, date('Y-m-d'))
+                '(t.group_id IN (SELECT e.group_id FROM enrollments e
+                                   JOIN parent_athlete pa ON pa.athlete_id = e.athlete_id
+                                  WHERE pa.parent_user_id = ?
+                                    AND (e.date_to IS NULL OR e.date_to >= ?))
+                  OR t.athlete_id IN (SELECT athlete_id FROM parent_athlete
+                                       WHERE parent_user_id = ?))',
+                array($userId, date('Y-m-d'), $userId)
             );
         }
 
         if (Auth::has('athlete')) {
             return array(
-                't.group_id IN (SELECT e.group_id FROM enrollments e
-                                  JOIN athletes a ON a.id = e.athlete_id
-                                 WHERE a.user_id = ?
-                                   AND (e.date_to IS NULL OR e.date_to >= ?))',
-                array($userId, date('Y-m-d'))
+                '(t.group_id IN (SELECT e.group_id FROM enrollments e
+                                   JOIN athletes a ON a.id = e.athlete_id
+                                  WHERE a.user_id = ?
+                                    AND (e.date_to IS NULL OR e.date_to >= ?))
+                  OR t.athlete_id IN (SELECT id FROM athletes WHERE user_id = ?))',
+                array($userId, date('Y-m-d'), $userId)
             );
         }
 
@@ -213,7 +274,8 @@ class Sched
      *
      * Возвращает текст помехи или null.
      */
-    public static function busy($date, $start, $duration, $kind, $spotId, $coachId, $exceptId = null)
+    public static function busy($date, $start, $duration, $kindId, $spotId, $coachId,
+                               $exceptId = null)
     {
         if (!$coachId) {
             return null;
@@ -264,10 +326,12 @@ return function (Router $router) {
         $all  = $request->input('all');
         $rows = Db::all(
             'SELECT r.*, v.name AS venue_name, sp.name AS spot_name, g.code AS group_code,
+                    lk.name AS kind_name,
                     c.last_name AS c_last, c.first_name AS c_first, c.middle_name AS c_middle
                FROM schedule_rules r
                JOIN venues v          ON v.id = r.venue_id
           LEFT JOIN spots sp          ON sp.id = r.spot_id
+          LEFT JOIN lesson_kinds lk   ON lk.id = r.kind_id
                JOIN training_groups g ON g.id = r.group_id
           LEFT JOIN coaches c         ON c.id = r.coach_id
               WHERE r.group_id = ?' . ($all ? '' : ' AND (r.valid_to IS NULL OR r.valid_to >= ?)') . '
@@ -293,7 +357,7 @@ return function (Router $router) {
             ->int('weekday', 'День недели', true, 1, 7)
             ->time('time_start', 'Время начала', true)
             ->int('duration_min', 'Длительность', false, 15, 480)
-            ->one_of('kind', 'Вид занятия', array('ice', 'gym', 'choreo'), true)
+            ->int('kind_id', 'Вид занятия', true, 1)
             ->int('spot_id', 'Площадка', true, 1)
             ->int('coach_id', 'Тренер', false, 1)
             ->int('extra_class_id', 'Дополнительное занятие', false, 1)
@@ -301,6 +365,7 @@ return function (Router $router) {
             ->date('valid_to', 'Действует по', false)
             ->done();
 
+        $kind = Sched::kind($data['kind_id']);
         $spot = Sched::spot($data['spot_id']);
         if ($data['coach_id']) {
             Repo::find('coaches', $data['coach_id'], 'Тренер');
@@ -323,10 +388,11 @@ return function (Router $router) {
 
         $id = Repo::create('schedule_rules', array(
             'group_id'       => $group['id'],
+            'athlete_id'     => null,
             'weekday'        => $data['weekday'],
             'time_start'     => $data['time_start'],
             'duration_min'   => $data['duration_min'] === null ? 60 : $data['duration_min'],
-            'kind'           => $data['kind'],
+            'kind_id'        => (int) $kind['id'],
             'extra_class_id' => $data['extra_class_id'],
             'venue_id'       => (int) $spot['venue_id'],
             'spot_id'        => (int) $spot['id'],
@@ -361,7 +427,7 @@ return function (Router $router) {
             ->int('weekday', 'День недели', false, 1, 7)
             ->time('time_start', 'Время начала', false)
             ->int('duration_min', 'Длительность', false, 15, 480)
-            ->one_of('kind', 'Вид занятия', array('ice', 'gym', 'choreo'), false)
+            ->int('kind_id', 'Вид занятия', false, 1)
             ->int('spot_id', 'Площадка', false, 1)
             ->int('coach_id', 'Тренер', false, 1)
             ->date('valid_to', 'Действует по', false)
@@ -381,6 +447,9 @@ return function (Router $router) {
         if (isset($changes['spot_id'])) {
             $spot = Sched::spot($changes['spot_id']);
             $changes['venue_id'] = (int) $spot['venue_id'];
+        }
+        if (isset($changes['kind_id'])) {
+            Sched::kind($changes['kind_id']);
         }
         if (isset($changes['coach_id'])) {
             $coach = Repo::find('coaches', $changes['coach_id'], 'Тренер');
@@ -408,7 +477,7 @@ return function (Router $router) {
             // день недели и срок действия к отдельному занятию
             // отношения не имеют
             $carry = array();
-            foreach (array('time_start', 'duration_min', 'kind', 'spot_id', 'venue_id',
+            foreach (array('time_start', 'duration_min', 'kind_id', 'spot_id', 'venue_id',
                            'coach_id') as $field) {
                 if (isset($changes[$field])) {
                     $carry[$field] = $changes[$field];
@@ -430,7 +499,7 @@ return function (Router $router) {
                     $start   = isset($carry['time_start']) ? $carry['time_start'] : $one['time_start'];
                     $length  = isset($carry['duration_min'])
                                ? $carry['duration_min'] : $one['duration_min'];
-                    $sort    = isset($carry['kind']) ? $carry['kind'] : $one['kind'];
+                    $sort    = isset($carry['kind_id']) ? $carry['kind_id'] : $one['kind_id'];
 
                     $busy = Sched::busy($one['date'], $start, (int) $length, $sort,
                                         $spotId, $coachId, $one['id']);
@@ -580,6 +649,100 @@ return function (Router $router) {
     });
 
     /* =====================================================
+       Индивидуальные занятия
+       ---------------------------------------------------
+       Те же правила и те же тренировки, только вместо
+       группы — один спортсмен. Отдельной сущности они
+       не заводят: иначе пришлось бы дублировать отмену,
+       перенос, замену тренера и отметки.
+       ===================================================== */
+
+    $router->get('/athletes/{id}/schedule', function (Request $request, $params) {
+        Auth::require_athlete($params['id']);
+
+        $all  = $request->input('all');
+        $rows = Db::all(
+            'SELECT r.*, v.name AS venue_name, sp.name AS spot_name, lk.name AS kind_name,
+                    a.last_name AS a_last, a.first_name AS a_first,
+                    c.last_name AS c_last, c.first_name AS c_first, c.middle_name AS c_middle
+               FROM schedule_rules r
+               JOIN venues v        ON v.id = r.venue_id
+          LEFT JOIN spots sp        ON sp.id = r.spot_id
+          LEFT JOIN lesson_kinds lk ON lk.id = r.kind_id
+          LEFT JOIN athletes a      ON a.id = r.athlete_id
+          LEFT JOIN coaches c       ON c.id = r.coach_id
+              WHERE r.athlete_id = ?' . ($all ? '' : ' AND (r.valid_to IS NULL OR r.valid_to >= ?)') . '
+              ORDER BY r.weekday, r.time_start',
+            $all ? array((int) $params['id']) : array((int) $params['id'], date('Y-m-d'))
+        );
+
+        $items = array();
+        foreach ($rows as $row) {
+            $row['coach_name'] = $row['c_last'] ? Repo::fullName(array(
+                'last_name' => $row['c_last'], 'first_name' => $row['c_first'],
+                'middle_name' => $row['c_middle'])) : null;
+            $row['athlete_name'] = $row['a_last'] ? Repo::fullName(array(
+                'last_name' => $row['a_last'], 'first_name' => $row['a_first'])) : null;
+            $items[] = Sched::rule($row);
+        }
+        Response::items($items);
+    });
+
+    /** Постоянное индивидуальное занятие. */
+    $router->post('/athletes/{id}/schedule', function (Request $request, $params) {
+        Auth::require_admin();
+        $athlete = Repo::find('athletes', $params['id'], 'Спортсмен');
+
+        $data = (new Validate($request->body))
+            ->int('weekday', 'День недели', true, 1, 7)
+            ->time('time_start', 'Время начала', true)
+            ->int('duration_min', 'Длительность', false, 15, 480)
+            ->int('kind_id', 'Вид занятия', true, 1)
+            ->int('spot_id', 'Площадка', true, 1)
+            ->int('coach_id', 'Тренер', false, 1)
+            ->date('valid_from', 'Действует с', true)
+            ->date('valid_to', 'Действует по', false)
+            ->done();
+
+        $kind = Sched::kind($data['kind_id']);
+        $spot = Sched::spot($data['spot_id']);
+        if ($data['coach_id']) {
+            Repo::find('coaches', $data['coach_id'], 'Тренер');
+        }
+        if ($data['valid_to'] && $data['valid_to'] < $data['valid_from']) {
+            invalid(array('valid_to' => 'Конец срока раньше начала'));
+        }
+
+        $twin = Db::value(
+            'SELECT id FROM schedule_rules
+              WHERE athlete_id = ? AND weekday = ? AND time_start = ?
+                AND (valid_to IS NULL OR valid_to >= ?) LIMIT 1',
+            array($athlete['id'], $data['weekday'], $data['time_start'], $data['valid_from'])
+        );
+        if ($twin) {
+            conflict('rule_exists', 'У этого спортсмена уже есть занятие в этот день и время');
+        }
+
+        $id = Repo::create('schedule_rules', array(
+            'group_id'     => null,
+            'athlete_id'   => $athlete['id'],
+            'weekday'      => $data['weekday'],
+            'time_start'   => $data['time_start'],
+            'duration_min' => $data['duration_min'] === null ? 60 : $data['duration_min'],
+            'kind_id'      => (int) $kind['id'],
+            'venue_id'     => (int) $spot['venue_id'],
+            'spot_id'      => (int) $spot['id'],
+            'coach_id'     => $data['coach_id'],
+            'valid_from'   => $data['valid_from'],
+            'valid_to'     => $data['valid_to'],
+            'created_by'   => Auth::id(),
+            'created_at'   => Db::now(),
+        ), 'schedule_rule');
+
+        Response::ok(Sched::ruleById($id), 201);
+    });
+
+    /* =====================================================
        Генерация тренировок
        ===================================================== */
 
@@ -598,6 +761,7 @@ return function (Router $router) {
 
         $data = (new Validate($request->body))
             ->int('group_id', 'Группа', false, 1)
+            ->int('athlete_id', 'Спортсмен', false, 1)
             ->int('weeks', 'На сколько недель', false, 1, 52)
             ->date('from', 'С какого числа', false)
             ->done();
@@ -617,12 +781,20 @@ return function (Router $router) {
             $where .= ' AND r.group_id = ?';
             $params[] = $data['group_id'];
         }
+        if ($data['athlete_id']) {
+            Repo::find('athletes', $data['athlete_id'], 'Спортсмен');
+            $where .= ' AND r.athlete_id = ?';
+            $params[] = $data['athlete_id'];
+        }
 
-        $rules = Db::all('SELECT r.*, g.code AS group_code
+        $rules = Db::all('SELECT r.*, g.code AS group_code,
+                                 a.last_name AS a_last, a.first_name AS a_first
                             FROM schedule_rules r
-                            JOIN training_groups g ON g.id = r.group_id
+                       LEFT JOIN training_groups g ON g.id = r.group_id
+                       LEFT JOIN athletes a        ON a.id = r.athlete_id
                            WHERE ' . $where . '
-                           ORDER BY r.group_id, r.weekday, r.time_start', $params);
+                           ORDER BY r.group_id, r.athlete_id, r.weekday, r.time_start',
+                         $params);
 
         $created = 0;
         $existed = 0;
@@ -642,22 +814,24 @@ return function (Router $router) {
                     continue;
                 }
 
-                $taken = Db::value(
-                    'SELECT id FROM trainings WHERE group_id = ? AND date = ? AND time_start = ?',
-                    array($rule['group_id'], $day, $rule['time_start'])
-                );
+                $taken = Sched::slotTaken($rule['group_id'], $rule['athlete_id'],
+                                          $day, $rule['time_start']);
 
                 if ($taken) {
                     $existed++;
                 } else {
                     $busy = Sched::busy($day, $rule['time_start'], (int) $rule['duration_min'],
-                                        $rule['kind'], $rule['spot_id'], $rule['coach_id']);
+                                        $rule['kind_id'], $rule['spot_id'], $rule['coach_id']);
                     if ($busy) {
                         // Не прерываем всю генерацию из-за одной
                         // накладки: создаём остальное и показываем,
                         // что именно не поместилось
                         $skipped[] = array(
-                            'group'  => $rule['group_code'],
+                            'group'  => $rule['group_code']
+                                        ? $rule['group_code']
+                                        : Repo::fullName(array(
+                                            'last_name'  => $rule['a_last'],
+                                            'first_name' => $rule['a_first'])),
                             'date'   => $day,
                             'time'   => substr($rule['time_start'], 0, 5),
                             'reason' => $busy,
@@ -665,10 +839,11 @@ return function (Router $router) {
                     } else {
                         Db::insert('trainings', array(
                             'group_id'       => $rule['group_id'],
+                            'athlete_id'     => $rule['athlete_id'],
                             'date'           => $day,
                             'time_start'     => $rule['time_start'],
                             'duration_min'   => $rule['duration_min'],
-                            'kind'           => $rule['kind'],
+                            'kind_id'        => $rule['kind_id'],
                             'extra_class_id' => $rule['extra_class_id'],
                             'venue_id'       => $rule['venue_id'],
                             'spot_id'        => $rule['spot_id'],
@@ -784,16 +959,31 @@ return function (Router $router) {
         Auth::require_admin();
 
         $data = (new Validate($request->body))
-            ->int('group_id', 'Группа', true, 1)
+            ->int('group_id', 'Группа', false, 1)
             ->date('date', 'Дата', true)
             ->time('time_start', 'Время начала', true)
             ->int('duration_min', 'Длительность', false, 15, 480)
-            ->one_of('kind', 'Вид занятия', array('ice', 'gym', 'choreo'), true)
+            ->int('kind_id', 'Вид занятия', true, 1)
             ->int('spot_id', 'Площадка', true, 1)
             ->int('coach_id', 'Тренер', false, 1)
+            ->int('athlete_id', 'Спортсмен', false, 1)
             ->done();
 
-        Repo::find('training_groups', $data['group_id'], 'Группа');
+        // Либо группа, либо один спортсмен. И то и другое
+        // сразу — это уже не занятие, а недоразумение
+        if (!$data['group_id'] && !$data['athlete_id']) {
+            invalid(array('group_id' => 'Укажите группу или спортсмена'));
+        }
+        if ($data['group_id'] && $data['athlete_id']) {
+            invalid(array('athlete_id' => 'Занятие либо групповое, либо индивидуальное'));
+        }
+        if ($data['group_id']) {
+            Repo::find('training_groups', $data['group_id'], 'Группа');
+        } else {
+            Repo::find('athletes', $data['athlete_id'], 'Спортсмен');
+        }
+
+        $kind = Sched::kind($data['kind_id']);
         $spot = Sched::spot($data['spot_id']);
         if ($data['coach_id']) {
             Repo::find('coaches', $data['coach_id'], 'Тренер');
@@ -801,24 +991,27 @@ return function (Router $router) {
 
         $duration = $data['duration_min'] === null ? 60 : $data['duration_min'];
 
-        $taken = Db::value('SELECT id FROM trainings WHERE group_id = ? AND date = ? AND time_start = ?',
-                           array($data['group_id'], $data['date'], $data['time_start']));
+        $taken = Sched::slotTaken($data['group_id'], $data['athlete_id'],
+                                  $data['date'], $data['time_start']);
         if ($taken) {
-            conflict('training_exists', 'У этой группы уже есть занятие в это время');
+            conflict('training_exists', $data['group_id']
+                     ? 'У этой группы уже есть занятие в это время'
+                     : 'У этого спортсмена уже есть занятие в это время');
         }
 
         $busy = Sched::busy($data['date'], $data['time_start'], $duration,
-                            $data['kind'], $spot['id'], $data['coach_id']);
+                            $kind['id'], $spot['id'], $data['coach_id']);
         if ($busy) {
             conflict('slot_busy', $busy);
         }
 
         $id = Repo::create('trainings', array(
             'group_id'     => $data['group_id'],
+            'athlete_id'   => $data['athlete_id'],
             'date'         => $data['date'],
             'time_start'   => $data['time_start'],
             'duration_min' => $duration,
-            'kind'         => $data['kind'],
+            'kind_id'      => (int) $kind['id'],
             'venue_id'     => (int) $spot['venue_id'],
             'spot_id'      => (int) $spot['id'],
             'coach_id'     => $data['coach_id'],
@@ -900,14 +1093,14 @@ return function (Router $router) {
             ? ($training['coach_id'] === null ? null : (int) $training['coach_id'])
             : $data['coach_id'];
 
-        $taken = Db::value('SELECT id FROM trainings WHERE group_id = ? AND date = ? AND time_start = ?',
-                           array($training['group_id'], $data['date'], $data['time_start']));
+        $taken = Sched::slotTaken($training['group_id'], $training['athlete_id'],
+                                  $data['date'], $data['time_start'], $training['id']);
         if ($taken) {
-            conflict('training_exists', 'У этой группы уже есть занятие в новое время');
+            conflict('training_exists', 'На это время занятие уже стоит');
         }
 
         $busy = Sched::busy($data['date'], $data['time_start'], (int) $training['duration_min'],
-                            $training['kind'], $spotId, $coachId, $training['id']);
+                            $training['kind_id'], $spotId, $coachId, $training['id']);
         if ($busy) {
             conflict('slot_busy', $busy);
         }
@@ -916,10 +1109,11 @@ return function (Router $router) {
 
         $newId = Db::insert('trainings', array(
             'group_id'       => $training['group_id'],
+            'athlete_id'     => $training['athlete_id'],
             'date'           => $data['date'],
             'time_start'     => $data['time_start'],
             'duration_min'   => $training['duration_min'],
-            'kind'           => $training['kind'],
+            'kind_id'        => $training['kind_id'],
             'extra_class_id' => $training['extra_class_id'],
             'venue_id'       => $venueId,
             'spot_id'        => $spotId,
@@ -993,7 +1187,7 @@ return function (Router $router) {
         }
 
         $busy = Sched::busy($training['date'], $training['time_start'],
-                            (int) $training['duration_min'], $training['kind'],
+                            (int) $training['duration_min'], $training['kind_id'],
                             (int) $training['spot_id'], (int) $coach['id'], $training['id']);
         if ($busy) {
             conflict('slot_busy', $busy);

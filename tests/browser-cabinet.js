@@ -262,7 +262,62 @@ async function fillSheet(page, values, submitText) {
   check('цен в настройках больше нет',
         !(await page.textContent('.board')).includes('single_lesson_price'));
 
+  console.log('\nКарточка спортсмена');
+
+  await page.goto(BASE + '/cabinet/#/athletes', { waitUntil: 'load' });
+  await page.waitForSelector('.rows tbody tr', { timeout: 8000 });
+  await page.click('tr:has-text("Петров")');
+  await page.waitForSelector('.head h1:has-text("Петров")', { timeout: 8000 });
+  await page.waitForTimeout(500);
+
+  check('дата зачисления проставилась сама',
+        (await page.textContent('.panes')).includes('Зачислен'),
+        await page.textContent('.panes'));
+  check('разряда пока нет',
+        (await page.textContent('.panes')).includes('не присвоен'),
+        await page.textContent('.panes'));
+  check('сроки допусков не заполнены',
+        (await page.textContent('.panes')).includes('не заполнено'),
+        await page.textContent('.panes'));
+
+  await page.click('.head__act button:has-text("Изменить")');
+  await page.waitForSelector('dialog.sheet[open]');
+  const rankChoices = await page.locator('dialog.sheet [name=rank_id] option').allTextContents();
+  check('разряды предлагаются списком от младшего к старшему',
+        rankChoices[1] === 'Юный фигурист' && rankChoices[rankChoices.length - 1] === 'МС',
+        rankChoices.join(' | '));
+
+  const soon = await page.evaluate(() => {
+    const d = new Date(); d.setDate(d.getDate() + 10);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
+         + '-' + ('0' + d.getDate()).slice(-2);
+  });
+  const past = await page.evaluate(() => {
+    const d = new Date(); d.setDate(d.getDate() - 5);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2)
+         + '-' + ('0' + d.getDate()).slice(-2);
+  });
+
+  await fillSheet(page, {
+    rank_id: '2 юношеский', rank_date: '2026-03-15', rank_doc: 'Приказ № 114-с',
+    medical_until: soon, insurance_until: past
+  });
+  await page.waitForTimeout(900);
+
+  const card = await page.textContent('.panes');
+  check('разряд и документ видны в карточке',
+        card.includes('2 юношеский') && card.includes('Приказ № 114-с'), card);
+  check('близкий срок помечен запасом в днях',
+        card.includes('осталось 10'), card);
+  check('просроченная страховка названа просроченной',
+        card.includes('просрочен 5'), card);
+  await page.screenshot({ path: OUT + '/cab-athlete-card.png' });
+
   console.log('\nПлощадки и постоянное расписание');
+
+  await page.goto(BASE + '/cabinet/#/settings', { waitUntil: 'load' });
+  await page.waitForSelector('.pane:has-text("Спорткомплексы")', { timeout: 8000 });
+  await page.waitForTimeout(600);
 
   // Арена школы заведена миграцией, и лёд в ней уже есть:
   // проверяем то, что увидит администратор на деле
@@ -294,6 +349,9 @@ async function fillSheet(page, values, submitText) {
   await page.waitForSelector('.head h1:has-text("Группы")');
   await page.click('tr:has-text("СОГ-1")');
   await page.waitForSelector('.head h1:has-text("СОГ-1")');
+  check('дни недели названы по-русски',
+        !(await page.textContent('.panes')).includes('каждый среда'),
+        await page.textContent('.panes'));
   check('в карточке группы есть постоянное расписание',
         (await page.textContent('.panes')).includes('Расписание не задано'),
         await page.textContent('.panes'));
@@ -308,6 +366,10 @@ async function fillSheet(page, values, submitText) {
 
   await page.click('text=Добавить занятие');
   await page.waitForSelector('dialog.sheet[open]');
+  const kindChoices = await page.locator('dialog.sheet [name=kind_id] option').allTextContents();
+  check('вид занятия берётся из справочника, а не из кода',
+        kindChoices.join(',') === 'Лёд,Зал,Хореография', kindChoices.join(','));
+
   const spotChoices = await page.locator('dialog.sheet [name=spot_id] option').allTextContents();
   check('в форме предлагают площадку, а не здание',
         spotChoices.includes('Лёд') && spotChoices.includes('Зал 2'),
@@ -317,7 +379,7 @@ async function fillSheet(page, values, submitText) {
 
   await fillSheet(page, {
     weekday: '1', time_start: '17:00', duration_min: '60',
-    kind: 'ice', spot_id: 'Лёд', valid_from: monday
+    kind_id: 'Лёд', spot_id: 'Лёд', valid_from: monday
   });
   await page.waitForTimeout(800);
   check('занятие попало в постоянное расписание',
@@ -421,11 +483,12 @@ async function fillSheet(page, values, submitText) {
     const groups = await (await fetch('/api/v1/groups', { credentials: 'same-origin' })).json();
     const venues = await (await fetch('/api/v1/venues', { credentials: 'same-origin' })).json();
     const spot = venues.items[0].spots[0];
+    const kinds = await (await fetch('/api/v1/lesson-kinds', { credentials: 'same-origin' })).json();
     const r = await fetch('/api/v1/trainings', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ group_id: groups.items[0].id, date: date,
-        time_start: '16:00', kind: 'ice', spot_id: spot.id })
+        time_start: '16:00', kind_id: kinds.items[0].id, spot_id: spot.id })
     });
     return (await r.json()).id;
   }, yesterday);
@@ -505,11 +568,13 @@ async function fillSheet(page, values, submitText) {
                + '-' + ('0' + d.getDate()).slice(-2);
     const groups = await (await fetch('/api/v1/groups', { credentials: 'same-origin' })).json();
     const venues = await (await fetch('/api/v1/venues', { credentials: 'same-origin' })).json();
+    const kinds = await (await fetch('/api/v1/lesson-kinds', { credentials: 'same-origin' })).json();
     const r = await fetch('/api/v1/trainings', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ group_id: groups.items[0].id, date: date,
-        time_start: '16:00', kind: 'ice', spot_id: venues.items[0].spots[0].id })
+        time_start: '16:00', kind_id: kinds.items[0].id,
+        spot_id: venues.items[0].spots[0].id })
     });
     return (await r.json()).id;
   });
@@ -521,6 +586,55 @@ async function fillSheet(page, values, submitText) {
         await page.textContent('.page'));
   check('и кнопки сохранения нет',
         (await page.locator('.markbar button:has-text("Сохранить")').count()) === 0);
+
+  console.log('\nИндивидуальные занятия');
+
+  await page.goto(BASE + '/cabinet/#/athletes', { waitUntil: 'load' });
+  await page.waitForSelector('.rows tbody tr', { timeout: 8000 });
+  await page.click('tr:has-text("Петров")');
+  await page.waitForSelector('.head h1:has-text("Петров")', { timeout: 8000 });
+  await page.waitForTimeout(600);
+
+  check('в карточке есть раздел индивидуальных занятий',
+        (await page.textContent('.panes')).includes('Индивидуальных занятий нет'),
+        await page.textContent('.panes'));
+
+  await page.click('.pane:has-text("Индивидуальные занятия") button:has-text("Разовое")');
+  await page.waitForSelector('dialog.sheet[open]');
+  await fillSheet(page, {
+    date: yesterday, time_start: '15:00', kind_id: 'Лёд',
+    spot_id: 'Лёд', duration_min: '45'
+  });
+  await page.waitForTimeout(1000);
+  check('разовое занятие появилось в карточке',
+        (await page.textContent('.panes')).includes('15:00'),
+        await page.textContent('.panes'));
+
+  await page.click('.pane:has-text("Индивидуальные занятия") button:has-text("Постоянное")');
+  await page.waitForSelector('dialog.sheet[open]');
+  await fillSheet(page, {
+    weekday: 'среда', time_start: '16:30', kind_id: 'Зал',
+    spot_id: 'Зал 2', duration_min: '45', valid_from: monday
+  });
+  await page.waitForTimeout(1000);
+  const solo = await page.textContent('.panes');
+  check('постоянное занятие появилось в карточке',
+        solo.includes('по средам') && solo.includes('16:30'), solo);
+  check('место названо без повторов',
+        !solo.includes('Лёд · Лёд'), solo);
+  check('прошедшее неотмеченное занятие видно сразу',
+        solo.includes('не отмечено'), solo);
+  await page.screenshot({ path: OUT + '/cab-solo.png' });
+
+  // Личное занятие должно попасть в общее расписание
+  await page.goto(BASE + '/cabinet/#/schedule/' + yesterday, { waitUntil: 'load' });
+  await page.waitForSelector('.tr', { timeout: 8000 });
+  await page.waitForTimeout(500);
+  const week = await page.textContent('.week');
+  check('личное занятие видно в расписании под именем',
+        week.includes('Петров Илья'), week.slice(0, 400));
+  check('и помечено как индивидуальное',
+        week.includes('индивидуальное'), week.slice(0, 400));
 
   console.log('\nПравка расписания и передача групп');
 

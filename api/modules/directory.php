@@ -34,10 +34,41 @@ class Dir
         $out['gender']      = $row['gender'];
         $out['note']        = $row['note'];
         $out['has_login']   = !empty($row['user_id']);
+
+        $out['joined_at']  = $row['joined_at'];
+        $out['left_at']    = $row['left_at'];
+        $out['rank_id']    = $row['rank_id'] === null ? null : (int) $row['rank_id'];
+        $out['rank_name']  = $row['rank_id']
+            ? Db::value('SELECT name FROM ranks WHERE id = ?', array($row['rank_id']))
+            : null;
+        $out['rank_date']  = $row['rank_date'];
+        $out['rank_doc']   = $row['rank_doc'];
+
+        // Сроки отдаём вместе с запасом в днях: решение
+        // «пора напоминать или нет» принимает сервер, иначе
+        // каждый клиент посчитает его по-своему
+        $out['medical_until']   = $row['medical_until'];
+        $out['medical_left']    = self::daysLeft($row['medical_until']);
+        $out['insurance_until'] = $row['insurance_until'];
+        $out['insurance_left']  = self::daysLeft($row['insurance_until']);
+
         $out['groups']      = self::groupsOf((int) $row['id']);
         $out['parents']     = self::parentsOf((int) $row['id']);
 
         return $out;
+    }
+
+    /**
+     * Сколько суток осталось до даты. Отрицательное — срок
+     * уже вышел, null — дата не заполнена.
+     */
+    public static function daysLeft($date)
+    {
+        if (!$date) {
+            return null;
+        }
+        $left = (strtotime($date) - strtotime(date('Y-m-d'))) / 86400;
+        return (int) round($left);
     }
 
     /** Группы спортсмена: текущие и прошлые. */
@@ -279,6 +310,7 @@ return function (Router $router) {
             ->date('birth_date', 'Дата рождения', false, true)
             ->one_of('gender', 'Пол', array('f', 'm'), false)
             ->text('note', 'Заметка', false, 500)
+            ->date('joined_at', 'Дата зачисления', false)
             ->done();
 
         $id = Repo::create('athletes', array(
@@ -288,6 +320,9 @@ return function (Router $router) {
             'birth_date'  => $data['birth_date'],
             'gender'      => $data['gender'],
             'note'        => $data['note'],
+            // Не указали — значит, зачислен сегодня: пустая
+            // графа хуже разумного умолчания
+            'joined_at'   => $data['joined_at'] === null ? date('Y-m-d') : $data['joined_at'],
             'status'      => 'active',
             'created_at'  => Db::now(),
         ), 'athlete');
@@ -311,14 +346,46 @@ return function (Router $router) {
             ->date('birth_date', 'Дата рождения', false, true)
             ->one_of('gender', 'Пол', array('f', 'm'), false)
             ->text('note', 'Заметка', false, 500)
+            ->date('joined_at', 'Дата зачисления', false)
+            ->date('left_at', 'Дата отчисления', false)
+            ->int('rank_id', 'Разряд', false, 1)
+            ->date('rank_date', 'Дата присвоения', false, true)
+            ->text('rank_doc', 'Номер документа', false, 120)
+            ->date('medical_until', 'Медицинский допуск до', false)
+            ->date('insurance_until', 'Страховка до', false)
             ->one_of('status', 'Состояние', array('active', 'archived'), false)
             ->done();
+
+        if ($data['rank_id'] !== null) {
+            $rank = Repo::find('ranks', $data['rank_id'], 'Разряд');
+            if ($rank['status'] !== 'active') {
+                conflict('rank_archived', 'Этот разряд убран из справочника');
+            }
+        }
+        if ($data['rank_date'] !== null && $data['rank_id'] === null
+            && $athlete['rank_id'] === null) {
+            invalid(array('rank_id' => 'Сначала выберите разряд'));
+        }
+        if ($data['left_at'] !== null && $data['joined_at'] === null
+            && $athlete['joined_at'] && $data['left_at'] < $athlete['joined_at']) {
+            invalid(array('left_at' => 'Отчисление раньше зачисления'));
+        }
 
         $changes = array();
         foreach ($data as $key => $value) {
             if ($value !== null) {
                 $changes[$key] = $value;
             }
+        }
+
+        // Отчислили — значит, в архив; вернули — значит, обратно.
+        // Два поля об одном и том же не должны расходиться
+        if (isset($changes['left_at'])) {
+            $changes['status'] = 'archived';
+        }
+        if (isset($changes['status']) && $changes['status'] === 'active'
+            && !isset($changes['left_at'])) {
+            $changes['left_at'] = null;
         }
 
         $saved = Repo::save('athletes', $athlete['id'], $changes, 'athlete',
@@ -351,6 +418,14 @@ return function (Router $router) {
             'note'        => null,
             'user_id'     => null,
             'status'      => 'archived',
+            // Дата отчисления проставляется сама: иначе
+            // в отчёте останется человек, зачисленный
+            // и никогда не отчисленный
+            'left_at'     => $athlete['left_at'] === null
+                             ? date('Y-m-d') : $athlete['left_at'],
+            'rank_doc'        => null,
+            'medical_until'   => null,
+            'insurance_until' => null,
         ), 'athlete', $reason);
         Audit::write('anonymize', 'athlete', $athlete['id'], null, null, $reason);
         Db::commit();
@@ -668,6 +743,139 @@ return function (Router $router) {
             $items[] = $person;
         }
         Response::items($items);
+    });
+
+    /* =====================================================
+       Разряды
+       ===================================================== */
+
+    $router->get('/ranks', function (Request $request) {
+        Auth::require_login();
+
+        $status = $request->input('status', 'active');
+        $where  = $status === 'all' ? '' : ' WHERE status = ?';
+        $params = $status === 'all' ? array() : array($status);
+
+        Response::items(Db::all('SELECT * FROM ranks' . $where . ' ORDER BY sort, name',
+                                $params));
+    });
+
+    $router->post('/ranks', function (Request $request) {
+        Auth::require_admin();
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', true, 80)
+            ->int('sort', 'Порядок', false, 0, 9999)
+            ->done();
+
+        $twin = Db::value('SELECT id FROM ranks WHERE name = ?', array($data['name']));
+        if ($twin) {
+            conflict('rank_exists', 'Такой разряд уже есть');
+        }
+
+        $id = Repo::create('ranks', array(
+            'name'   => $data['name'],
+            'sort'   => $data['sort'] === null ? 100 : $data['sort'],
+            'status' => 'active',
+        ), 'rank');
+        Response::ok(Repo::find('ranks', $id), 201);
+    });
+
+    $router->patch('/ranks/{id}', function (Request $request, $params) {
+        Auth::require_admin();
+        $rank = Repo::find('ranks', $params['id'], 'Разряд');
+
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', 'present', 80)
+            ->int('sort', 'Порядок', false, 0, 9999)
+            ->one_of('status', 'Состояние', array('active', 'archived'), false)
+            ->done();
+
+        $changes = array();
+        foreach ($data as $key => $value) {
+            if ($value !== null) { $changes[$key] = $value; }
+        }
+        Response::ok(Repo::save('ranks', $rank['id'], $changes, 'rank',
+                                $request->input('reason')));
+    });
+
+    /* =====================================================
+       Виды занятий
+       ===================================================== */
+
+    $router->get('/lesson-kinds', function (Request $request) {
+        Auth::require_login();
+
+        $status = $request->input('status', 'active');
+        $where  = $status === 'all' ? '' : ' WHERE status = ?';
+        $params = $status === 'all' ? array() : array($status);
+
+        $rows  = Db::all('SELECT * FROM lesson_kinds' . $where . ' ORDER BY sort, name', $params);
+        $items = array();
+        foreach ($rows as $row) {
+            $items[] = array(
+                'id'     => (int) $row['id'],
+                'name'   => $row['name'],
+                'on_ice' => (int) $row['on_ice'] === 1,
+                'sort'   => (int) $row['sort'],
+                'status' => $row['status'],
+                'in_use' => (bool) Db::value(
+                    'SELECT 1 FROM trainings WHERE kind_id = ? LIMIT 1', array($row['id'])),
+            );
+        }
+        Response::items($items);
+    });
+
+    $router->post('/lesson-kinds', function (Request $request) {
+        Auth::require_admin();
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', true, 80)
+            ->bool('on_ice', false)
+            ->int('sort', 'Порядок', false, 0, 9999)
+            ->done();
+
+        $twin = Db::value('SELECT id FROM lesson_kinds WHERE name = ?', array($data['name']));
+        if ($twin) {
+            conflict('kind_exists', 'Такой вид занятия уже есть');
+        }
+
+        $id = Repo::create('lesson_kinds', array(
+            'name'   => $data['name'],
+            'on_ice' => $data['on_ice'] ? 1 : 0,
+            'sort'   => $data['sort'] === null ? 100 : $data['sort'],
+            'status' => 'active',
+        ), 'lesson_kind');
+        Response::ok(Repo::find('lesson_kinds', $id), 201);
+    });
+
+    $router->patch('/lesson-kinds/{id}', function (Request $request, $params) {
+        Auth::require_admin();
+        $kind = Repo::find('lesson_kinds', $params['id'], 'Вид занятия');
+
+        $data = (new Validate($request->body))
+            ->text('name', 'Название', 'present', 80)
+            ->bool('on_ice', (int) $kind['on_ice'] === 1)
+            ->int('sort', 'Порядок', false, 0, 9999)
+            ->one_of('status', 'Состояние', array('active', 'archived'), false)
+            ->done();
+
+        // Вид, по которому уже стоят будущие занятия, в архив
+        // не убираем: расписание осталось бы без вида
+        if (isset($data['status']) && $data['status'] === 'archived') {
+            $busy = Db::value(
+                'SELECT COUNT(*) FROM trainings WHERE kind_id = ? AND date >= ? AND status = ?',
+                array($kind['id'], date('Y-m-d'), 'planned'));
+            if ($busy) {
+                conflict('kind_in_use', 'По этому виду ещё стоят занятия: ' . $busy
+                         . '. Сначала переведите их на другой вид');
+            }
+        }
+
+        $changes = array('on_ice' => $data['on_ice'] ? 1 : 0);
+        foreach ($data as $key => $value) {
+            if ($key !== 'on_ice' && $value !== null) { $changes[$key] = $value; }
+        }
+        Response::ok(Repo::save('lesson_kinds', $kind['id'], $changes, 'lesson_kind',
+                                $request->input('reason')));
     });
 
     /* =====================================================
