@@ -83,6 +83,11 @@ class Dir
             array((int) $athleteId)
         );
 
+        // Отчисленный не занимается «сейчас» ни в одной группе,
+        // даже если его последний день — сегодня
+        $here = Db::value('SELECT status FROM athletes WHERE id = ?',
+                          array((int) $athleteId)) === 'active';
+
         $today = date('Y-m-d');
         $out   = array();
         foreach ($rows as $row) {
@@ -93,7 +98,8 @@ class Dir
                 'name'          => $row['name'],
                 'date_from'     => $row['date_from'],
                 'date_to'       => $row['date_to'],
-                'current'       => ($row['date_to'] === null || $row['date_to'] >= $today)
+                'current'       => $here
+                                   && ($row['date_to'] === null || $row['date_to'] >= $today)
                                    && $row['date_from'] <= $today,
             );
         }
@@ -157,10 +163,16 @@ class Dir
 
         $out['tariff_id'] = $row['tariff_id'] === null ? null : (int) $row['tariff_id'];
         $out['coaches']   = self::coachesOf((int) $row['id']);
+        // Считаем тех же, кого показываем в составе: отчисленный
+        // спортсмен с незакрытым назначением раньше продолжал
+        // числиться, и в карточке группы значился один
+        // занимающийся при пустом списке
         $out['athletes']  = (int) Db::value(
-            'SELECT COUNT(*) FROM enrollments
-              WHERE group_id = ? AND (date_to IS NULL OR date_to >= ?)',
-            array((int) $row['id'], date('Y-m-d'))
+            'SELECT COUNT(*) FROM enrollments e
+               JOIN athletes a ON a.id = e.athlete_id
+              WHERE e.group_id = ? AND a.status = ?
+                AND (e.date_to IS NULL OR e.date_to >= ?)',
+            array((int) $row['id'], 'active', date('Y-m-d'))
         );
         return $out;
     }
@@ -237,6 +249,30 @@ class Dir
                     : 'Эта почта уже привязана к другому пользователю');
             }
         }
+    }
+
+    /**
+     * Закрывает открытые назначения в группы.
+     *
+     * Ушёл из школы — ушёл и из группы. Без этого он остаётся
+     * в составе на будущих тренировках и в счётчике группы,
+     * хотя его давно нет.
+     */
+    public static function leaveGroups($athleteId, $date, $reason = null)
+    {
+        $open = Db::all('SELECT id, group_id, date_from FROM enrollments
+                          WHERE athlete_id = ? AND (date_to IS NULL OR date_to > ?)',
+                        array((int) $athleteId, $date));
+
+        foreach ($open as $one) {
+            // Назначение не может кончиться раньше, чем началось
+            $end = $one['date_from'] > $date ? $one['date_from'] : $date;
+            Db::update('enrollments', $one['id'], array('date_to' => $end));
+            Audit::write('close_enrollment', 'enrollment', $one['id'], null,
+                         array('date_to' => $end, 'group_id' => (int) $one['group_id']),
+                         $reason === null ? 'Отчисление' : $reason);
+        }
+        return count($open);
     }
 
     /** Заводит пользователю роль, если её ещё нет. */
@@ -406,10 +442,25 @@ return function (Router $router) {
             && !isset($changes['left_at'])) {
             $changes['left_at'] = null;
         }
+        // Перевели в архив без даты — считаем, что ушёл сегодня
+        if (isset($changes['status']) && $changes['status'] === 'archived'
+            && !isset($changes['left_at']) && $athlete['left_at'] === null) {
+            $changes['left_at'] = date('Y-m-d');
+        }
+
+        Db::begin();
 
         $saved = Repo::save('athletes', $athlete['id'], $changes, 'athlete',
                             $request->input('reason'));
-        Response::ok(Dir::athlete($saved, true));
+
+        if (isset($changes['status']) && $changes['status'] === 'archived') {
+            Dir::leaveGroups($athlete['id'], $changes['left_at'],
+                             $request->input('reason'));
+        }
+
+        Db::commit();
+
+        Response::ok(Dir::athlete(Repo::find('athletes', $athlete['id']), true));
     });
 
     /**
@@ -426,8 +477,11 @@ return function (Router $router) {
             invalid(array('reason' => 'Укажите основание: удаление данных — необратимое действие'));
         }
 
+        $leftAt = $athlete['left_at'] === null ? date('Y-m-d') : $athlete['left_at'];
+
         Db::begin();
         Db::run('DELETE FROM parent_athlete WHERE athlete_id = ?', array($athlete['id']));
+        Dir::leaveGroups($athlete['id'], $leftAt, $reason);
         Repo::save('athletes', $athlete['id'], array(
             'last_name'   => 'Удалённый',
             'first_name'  => 'профиль',
@@ -440,8 +494,7 @@ return function (Router $router) {
             // Дата отчисления проставляется сама: иначе
             // в отчёте останется человек, зачисленный
             // и никогда не отчисленный
-            'left_at'     => $athlete['left_at'] === null
-                             ? date('Y-m-d') : $athlete['left_at'],
+            'left_at'     => $leftAt,
             'rank_doc'        => null,
             'medical_until'   => null,
             'insurance_until' => null,
@@ -1447,14 +1500,39 @@ return function (Router $router) {
         $athlete = Repo::find('athletes', $data['athlete_id'], 'Спортсмен');
         $group   = Repo::find('training_groups', $data['group_id'], 'Группа');
 
-        $already = Db::value(
-            'SELECT 1 FROM enrollments
+        // Отчисленного в группу не ставим: иначе он снова
+        // окажется в составе, которого быть не должно
+        if ($athlete['status'] !== 'active') {
+            conflict('athlete_archived',
+                'Этот спортсмен отчислен. Сначала верните его в работу');
+        }
+
+        // Недавнее назначение в ту же группу: либо он всё ещё
+        // в ней — тогда это повтор, либо вернулся — тогда
+        // продолжаем прежнее, а не плодим вторую запись
+        $edge   = date('Y-m-d', strtotime($data['date_from'] . ' -1 day'));
+        $recent = Db::row(
+            'SELECT id, date_to FROM enrollments
               WHERE athlete_id = ? AND group_id = ?
-                AND (date_to IS NULL OR date_to >= ?) LIMIT 1',
-            array($athlete['id'], $group['id'], $data['date_from'])
+                AND (date_to IS NULL OR date_to >= ?)
+              ORDER BY date_from DESC LIMIT 1',
+            array($athlete['id'], $group['id'], $edge)
         );
-        if ($already) {
+
+        if ($recent && $recent['date_to'] === null) {
             conflict('already_enrolled', 'Спортсмен уже занимается в этой группе');
+        }
+        if ($recent) {
+            Db::update('enrollments', $recent['id'], array('date_to' => null));
+            Audit::write('reopen_enrollment', 'enrollment', $recent['id'],
+                         array('date_to' => $recent['date_to']), array('date_to' => null),
+                         'Вернулся в группу');
+            Response::ok(array(
+                'enrollment_id' => (int) $recent['id'],
+                'closed'        => 0,
+                'reopened'      => true,
+                'groups'        => Dir::groupsOf($athlete['id']),
+            ));
         }
 
         Db::begin();

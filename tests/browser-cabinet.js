@@ -758,6 +758,52 @@ async function fillSheet(page, values, submitText) {
         hand.includes('останутся'), hand);
   await page.click('dialog.sheet button:has-text("Отмена")');
 
+  console.log('\nОтчисление и счётчик группы');
+
+  await page.goto(BASE + '/cabinet/#/groups', { waitUntil: 'load' });
+  await page.waitForSelector('.rows tbody tr', { timeout: 8000 });
+  await page.click('tr:has-text("СОГ-1")');
+  await page.waitForSelector('.head h1:has-text("СОГ-1")');
+  await page.waitForTimeout(600);
+
+  const countBefore = await page.textContent('.pane:has-text("Сведения")');
+  const inList = await page.locator('.pane:has-text("Состав группы") .line').count();
+  check('счётчик сходится со списком до отчисления',
+        countBefore.includes('Занимаются') && countBefore.includes(String(inList)),
+        countBefore + ' | в списке: ' + inList);
+
+  await page.click('.pane:has-text("Состав группы") a.linkish');
+  await page.waitForSelector('.head h1', { timeout: 8000 });
+  await page.waitForTimeout(400);
+  await page.click('.head__act button:has-text("Изменить")');
+  await page.waitForSelector('dialog.sheet[open]');
+  await fillSheet(page, { status: 'отчислен' });
+  await page.waitForTimeout(900);
+  check('в карточке видно, что отчислен',
+        (await page.textContent('.panes')).includes('отчислен'),
+        await page.textContent('.panes'));
+  check('и группа из текущих ушла',
+        !(await page.textContent('.pane:has-text("Группы")')).includes('сейчас'),
+        await page.textContent('.pane:has-text("Группы")'));
+
+  await page.goto(BASE + '/cabinet/#/groups', { waitUntil: 'load' });
+  await page.waitForSelector('.rows tbody tr', { timeout: 8000 });
+  await page.click('tr:has-text("СОГ-1")');
+  await page.waitForSelector('.head h1:has-text("СОГ-1")');
+  await page.waitForTimeout(600);
+
+  const countAfter = await page.textContent('.pane:has-text("Сведения")');
+  const leftIn = await page.locator('.pane:has-text("Состав группы") .line').count();
+  check('счётчик уменьшился вместе со списком',
+        countAfter.includes('Занимаются') && countAfter.includes(String(leftIn))
+        && leftIn === inList - 1,
+        countAfter + ' | в списке: ' + leftIn);
+  check('пустой состав назван пустым',
+        leftIn > 0 || (await page.textContent('.pane:has-text("Состав группы")'))
+                        .includes('никто не назначен'),
+        await page.textContent('.pane:has-text("Состав группы")'));
+  await page.screenshot({ path: OUT + '/cab-group-count.png' });
+
   console.log('\nЖурнал за месяц');
 
   await page.goto(BASE + '/cabinet/#/groups', { waitUntil: 'load' });

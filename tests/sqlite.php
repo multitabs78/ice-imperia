@@ -113,6 +113,7 @@ class SqliteTestDb
         $sql = preg_replace('/\s*ON DUPLICATE KEY UPDATE .*$/is', '', $sql);
         $sql = preg_replace('/^INSERT\s+INTO\b/i', 'INSERT OR IGNORE INTO', $sql);
         $sql = preg_replace('/\bNOW\(\)/i', "datetime('now')", $sql);
+        $sql = preg_replace('/\bCURDATE\(\)/i', "date('now')", $sql);
 
         return trim($sql);
     }

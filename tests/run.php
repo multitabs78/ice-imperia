@@ -1709,6 +1709,84 @@ check('в записи видно группу и дату',
 $r = call('GET', '/athletes/' . $kids['Белов'] . '/attendance', null, $coach2Token);
 check('посторонний тренер историю не видит', $r['status'] === 403, 'код ' . $r['status']);
 
+echo "\nОтчисление выводит из группы\n";
+
+$r = call('POST', '/athletes', array('last_name' => 'Тестов', 'first_name' => 'Тест'), $admin);
+$temp = $r['body']['id'];
+call('POST', '/enrollments', array('athlete_id' => $temp,
+     'group_id' => $gm, 'date_from' => $long), $admin);
+
+$r = call('GET', '/groups/' . $gm, null, $admin);
+$was = $r['body']['athletes'];
+check('после назначения он в счётчике', $was >= 1, 'занимающихся: ' . $was);
+
+$r = call('PATCH', '/athletes/' . $temp,
+          array('status' => 'archived', 'reason' => 'Тестовая запись'), $admin);
+check('отчисление прошло', $r['status'] === 200, 'код ' . $r['status']);
+check('дата отчисления проставилась', $r['body']['left_at'] === date('Y-m-d'), $r['raw']);
+
+$open = (int) $pdo->query('SELECT COUNT(*) FROM enrollments
+                            WHERE athlete_id = ' . (int) $temp . ' AND date_to IS NULL')
+                  ->fetchColumn();
+check('назначение в группу закрылось', $open === 0, 'открытых: ' . $open);
+
+$r = call('GET', '/groups/' . $gm, null, $admin);
+check('и счётчик группы уменьшился', $r['body']['athletes'] === $was - 1,
+      'было ' . $was . ', стало ' . $r['body']['athletes']);
+
+$r = call('GET', '/athletes/' . $temp, null, $admin);
+$cur = 0;
+foreach ($r['body']['groups'] as $one) { if ($one['current']) { $cur++; } }
+check('и ни одна группа у него больше не текущая', $cur === 0, $r['raw']);
+
+$r = call('GET', '/athletes?group_id=' . $gm, null, $admin);
+check('счётчик сходится со списком состава',
+      count($r['body']['items']) === $r['body']['total']
+      && $r['body']['total'] === $was - 1,
+      'в списке ' . $r['body']['total']);
+
+$r = call('POST', '/enrollments', array('athlete_id' => $temp,
+          'group_id' => $gm, 'date_from' => date('Y-m-d')), $admin);
+check('отчисленного в группу не назначить', $r['status'] === 409
+      && $r['body']['error'] === 'athlete_archived', 'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('PATCH', '/athletes/' . $temp,
+          array('status' => 'active', 'reason' => 'Вернули'), $admin);
+check('возврат снимает дату отчисления', $r['body']['left_at'] === null, $r['raw']);
+
+$r = call('POST', '/enrollments', array('athlete_id' => $temp,
+          'group_id' => $gm, 'date_from' => date('Y-m-d')), $admin);
+check('и назначить его снова можно', $r['status'] === 200 || $r['status'] === 201,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+check('прежнее назначение продолжено, а не задвоено',
+      !empty($r['body']['reopened']), $r['raw']);
+
+$rows = (int) $pdo->query('SELECT COUNT(*) FROM enrollments
+                            WHERE athlete_id = ' . (int) $temp . ' AND group_id = ' . (int) $gm)
+                  ->fetchColumn();
+check('назначение в группе осталось одно', $rows === 1, 'записей: ' . $rows);
+
+$r = call('POST', '/enrollments', array('athlete_id' => $temp,
+          'group_id' => $gm, 'date_from' => date('Y-m-d')), $admin);
+check('а повтор при открытом назначении по-прежнему отказ', $r['status'] === 409
+      && $r['body']['error'] === 'already_enrolled', 'код ' . $r['status']);
+
+// Обезличивание тоже выводит из группы
+$r = call('GET', '/groups/' . $gm, null, $admin);
+$before = $r['body']['athletes'];
+call('POST', '/athletes/' . $temp . '/anonymize',
+     array('reason' => 'Заявление'), $admin);
+
+$open = (int) $pdo->query('SELECT COUNT(*) FROM enrollments
+                            WHERE athlete_id = ' . (int) $temp . ' AND date_to IS NULL')
+                  ->fetchColumn();
+check('после удаления данных назначений тоже не осталось', $open === 0,
+      'открытых: ' . $open);
+
+$r = call('GET', '/groups/' . $gm, null, $admin);
+check('и счётчик снова сошёлся', $r['body']['athletes'] === $before - 1,
+      'было ' . $before . ', стало ' . $r['body']['athletes']);
+
 echo "\nЖурнал справочников\n";
 
 $kinds = $pdo->query("SELECT DISTINCT entity FROM audit_log")->fetchAll(PDO::FETCH_COLUMN);
