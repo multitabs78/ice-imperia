@@ -99,16 +99,42 @@ try {
             id         INT UNSIGNED NOT NULL AUTO_INCREMENT,
             name       VARCHAR(190) NOT NULL,
             statements SMALLINT UNSIGNED NOT NULL,
+            done_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+            finished   TINYINT(1) NOT NULL DEFAULT 1,
             applied_at DATETIME NOT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY uq_migrations_name (name)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
     );
 
-    $applied = $pdo->query('SELECT name, applied_at FROM migrations ORDER BY name')->fetchAll();
+    // Учёт по командам, а не по файлам. DDL в MySQL
+    // не откатывается: если файл упал на середине, половина
+    // изменений уже внесена, и повтор с первой команды
+    // натыкается на то, чего уже нет — например, на столбец,
+    // удалённый предыдущим запуском. Поэтому запоминаем,
+    // сколько команд прошло, и продолжаем с этого места.
+    foreach (array('done_count SMALLINT UNSIGNED NOT NULL DEFAULT 0',
+                   'finished TINYINT(1) NOT NULL DEFAULT 1') as $column) {
+        try {
+            $pdo->exec('ALTER TABLE migrations ADD COLUMN ' . $column);
+        } catch (PDOException $error) {
+            // 1060 — столбец уже есть, значит учёт уже обновлён
+            if (!isset($error->errorInfo[1]) || (int) $error->errorInfo[1] !== 1060) {
+                throw $error;
+            }
+        }
+    }
+
+    $applied = $pdo->query('SELECT name, applied_at, done_count, finished
+                              FROM migrations ORDER BY name')->fetchAll();
     $done    = array();
+    $partial = array();
     foreach ($applied as $row) {
-        $done[$row['name']] = $row['applied_at'];
+        if ((int) $row['finished'] === 1) {
+            $done[$row['name']] = $row['applied_at'];
+        } else {
+            $partial[$row['name']] = (int) $row['done_count'];
+        }
     }
 
     $files = glob(__DIR__ . '/migrations/*.sql');
@@ -119,7 +145,21 @@ try {
     }
 
     $insert = $pdo->prepare(
-        'INSERT INTO migrations (name, statements, applied_at) VALUES (?, ?, NOW())'
+        'INSERT INTO migrations (name, statements, done_count, finished, applied_at)
+              VALUES (?, ?, ?, 1, NOW())
+         ON DUPLICATE KEY UPDATE statements = VALUES(statements),
+                                 done_count = VALUES(done_count),
+                                 finished   = 1,
+                                 applied_at = NOW()'
+    );
+
+    // Отметка о том, сколько команд файла уже прошло
+    $mark = $pdo->prepare(
+        'INSERT INTO migrations (name, statements, done_count, finished, applied_at)
+              VALUES (?, ?, ?, 0, NOW())
+         ON DUPLICATE KEY UPDATE statements = VALUES(statements),
+                                 done_count = VALUES(done_count),
+                                 finished   = 0'
     );
 
     foreach ($files as $path) {
@@ -136,14 +176,26 @@ try {
         }
 
         $statements = split_sql(preg_replace('/^\xEF\xBB\xBF/', '', $sql));
-        $n = 0;
+
+        // Сколько команд этого файла уже прошло в прошлый раз
+        $from = isset($partial[$name]) ? $partial[$name] : 0;
+        if ($from >= count($statements)) {
+            $from = 0;
+        }
+        $n = $from;
 
         $skipped = 0;
 
         foreach ($statements as $i => $statement) {
+            if ($i < $from) {
+                continue;
+            }
             try {
                 $pdo->exec($statement);
                 $n++;
+                // Запоминаем сразу: следующая команда может
+                // упасть, и тогда повтор начнётся отсюда
+                $mark->execute(array($name, count($statements), $n));
             } catch (PDOException $error) {
                 // DDL в MySQL не откатывается: если файл упал
                 // на середине, часть изменений уже внесена.
@@ -152,7 +204,10 @@ try {
                 // выполненным, а не ошибкой. Иначе повторный
                 // запуск после сбоя невозможен.
                 $code = isset($error->errorInfo[1]) ? (int) $error->errorInfo[1] : 0;
-                $done = array(
+                // Имя отличается от карты применённых миграций
+                // намеренно: раньше здесь было $done, и оно её
+                // затеняло
+                $harmless = array(
                     1050,  // таблица уже есть
                     1060,  // столбец уже есть
                     1061,  // такой индекс уже есть
@@ -160,22 +215,27 @@ try {
                     1826,  // внешний ключ с таким именем уже есть
                 );
 
-                if (in_array($code, $done, true)) {
+                if (in_array($code, $harmless, true)) {
                     $skipped++;
+                    $n++;
+                    $mark->execute(array($name, count($statements), $n));
                     continue;
                 }
 
                 throw new RuntimeException(
                     'Файл ' . $name . ', команда ' . ($i + 1) . ' из ' . count($statements)
                     . ': ' . $error->getMessage()
+                    . "\n\nПройдено команд: " . $n . '. Повторный запуск продолжит '
+                    . 'с места остановки.'
                     . "\n\n" . mb_substr($statement, 0, 500)
                 );
             }
         }
 
-        $insert->execute(array($name, $n));
-        $steps[] = array('ok', $name, 'применена, команд: ' . $n
-                       . ($skipped ? ', уже было: ' . $skipped : ''));
+        $insert->execute(array($name, count($statements), $n));
+        $steps[] = array('ok', $name,
+            ($from ? 'дозавершена с команды ' . ($from + 1) . ', ' : 'применена, ')
+            . 'команд: ' . $n . ($skipped ? ', уже было: ' . $skipped : ''));
     }
 
     // Что получилось в базе

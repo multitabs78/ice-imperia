@@ -285,11 +285,17 @@ class Sched
         $to   = $from + $duration * 60;
 
         $rows = Db::all(
+            // LEFT JOIN, а не JOIN: у индивидуального занятия
+            // группы нет, и внутреннее соединение выбрасывало
+            // его из проверки — тренер мог оказаться на льду
+            // с группой и на личном занятии одновременно
             'SELECT t.id, t.time_start, t.duration_min, t.spot_id,
-                    g.code AS group_code, sp.name AS spot_name
+                    g.code AS group_code, sp.name AS spot_name,
+                    a.last_name AS a_last, a.first_name AS a_first
                FROM trainings t
-               JOIN training_groups g ON g.id = t.group_id
+          LEFT JOIN training_groups g ON g.id = t.group_id
           LEFT JOIN spots sp          ON sp.id = t.spot_id
+          LEFT JOIN athletes a        ON a.id = t.athlete_id
               WHERE t.date = ? AND t.status IN (?, ?) AND t.id <> ? AND t.coach_id = ?',
             array($date, 'planned', 'held', (int) $exceptId, (int) $coachId)
         );
@@ -305,7 +311,12 @@ class Sched
                 continue;   // та же площадка — объединённое занятие
             }
 
-            return 'Этот тренер в это время уже ведёт ' . $row['group_code']
+            $what = $row['group_code']
+                ? $row['group_code']
+                : Repo::fullName(array('last_name'  => $row['a_last'],
+                                       'first_name' => $row['a_first']));
+
+            return 'Этот тренер в это время уже ведёт ' . $what
                  . ($row['spot_name'] ? ' — ' . $row['spot_name'] : '');
         }
 
@@ -630,22 +641,43 @@ return function (Router $router) {
         // Запланированные занятия по этому правилу с даты
         // отказа убираем: они ещё не состоялись и никого
         // не касаются. Проведённые и отменённые не трогаем.
+        //
+        // Кроме тех, на которых уже что-то отмечено: удаление
+        // тренировки уносит отметки за собой, а отработку
+        // можно записать и на непроведённое занятие. Такие
+        // отменяем — след остаётся.
         $future = Db::all(
-            'SELECT id FROM trainings
-              WHERE rule_id = ? AND date >= ? AND status = ?',
+            'SELECT t.id,
+                    (SELECT COUNT(*) FROM attendance a WHERE a.training_id = t.id) AS marks
+               FROM trainings t
+              WHERE t.rule_id = ? AND t.date >= ? AND t.status = ?',
             array($rule['id'], $from, 'planned')
         );
+
+        $removed   = 0;
+        $cancelled = 0;
         foreach ($future as $row) {
-            Db::run('DELETE FROM trainings WHERE id = ?', array($row['id']));
+            if ((int) $row['marks'] > 0) {
+                Db::update('trainings', $row['id'], array(
+                    'status'        => 'cancelled',
+                    'cancel_reason' => 'Занятие убрано из расписания',
+                ));
+                $cancelled++;
+            } else {
+                Db::run('DELETE FROM trainings WHERE id = ?', array($row['id']));
+                $removed++;
+            }
         }
 
         Audit::write('close', 'schedule_rule', $rule['id'], null,
-                     array('valid_to' => $closeAt, 'removed_trainings' => count($future)),
+                     array('valid_to' => $closeAt, 'removed_trainings' => $removed,
+                           'cancelled_trainings' => $cancelled),
                      $request->input('reason'));
 
         Db::commit();
 
-        Response::ok(array('valid_to' => $closeAt, 'removed' => count($future)));
+        Response::ok(array('valid_to' => $closeAt, 'removed' => $removed,
+                           'cancelled' => $cancelled));
     });
 
     /* =====================================================

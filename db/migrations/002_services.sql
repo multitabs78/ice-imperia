@@ -46,5 +46,14 @@ ALTER TABLE extra_classes ADD CONSTRAINT fk_extra_classes_service
 
 ALTER TABLE extra_classes DROP COLUMN drop_in_price;
 
--- Цена разового занятия больше не настройка, а услуга
+-- Цена разового занятия больше не настройка, а услуга.
+-- Сначала переносим значение: школа могла поменять его
+-- в настройках, и подставлять вместо него 2500 из текста
+-- миграции значило бы молча вернуть старую цену
+UPDATE services
+   SET price = (SELECT CAST(value AS DECIMAL(10,2)) FROM settings
+                 WHERE name = 'single_lesson_price')
+ WHERE code = 'single_lesson'
+   AND EXISTS (SELECT 1 FROM settings WHERE name = 'single_lesson_price');
+
 DELETE FROM settings WHERE name = 'single_lesson_price';

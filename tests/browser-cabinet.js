@@ -398,9 +398,11 @@ async function fillSheet(page, values, submitText) {
   check('зал с номером добавлен',
         (await page.textContent('.spots')).includes('Зал 2'),
         await page.textContent('.spots'));
+  // Зал теперь заводит и миграция 007 — значит, их двое
+  const kinds = await page.locator('.spot__kind').allTextContents();
   check('видно, что лёд, а что зал',
-        (await page.locator('.spot__kind').allTextContents()).sort().join(',') === 'зал,лёд',
-        (await page.locator('.spot__kind').allTextContents()).join(','));
+        kinds.indexOf('лёд') !== -1 && kinds.indexOf('зал') !== -1,
+        kinds.join(','));
 
   await page.click('.line:has-text("Гололёд") button:has-text("Добавить площадку")');
   await fillSheet(page, { name: 'Зал 2', kind: 'hall' }, false);

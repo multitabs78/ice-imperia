@@ -17,6 +17,22 @@
 
 class Marks
 {
+    /**
+     * Кто вправе ставить отметки.
+     *
+     * Видеть занятие и менять отметки — разные права.
+     * Родитель и спортсмен видят своё занятие, в том числе
+     * индивидуальное, но журнал посещений ведёт школа.
+     */
+    public static function require_marker($trainingId)
+    {
+        Auth::require_training($trainingId);
+
+        if (!Auth::has('admin') && !Auth::coach_id()) {
+            forbidden('Отмечать посещения может тренер или администратор');
+        }
+    }
+
     public static $labels = array(
         'present'     => 'был',
         'absent'      => 'пропуск',
@@ -207,7 +223,7 @@ return function (Router $router) {
      */
     $router->post('/trainings/{id}/attendance', function (Request $request, $params) {
         Auth::require_login();
-        Auth::require_training($params['id']);
+        Marks::require_marker($params['id']);
 
         $training = Repo::find('trainings', $params['id'], 'Тренировка');
 
@@ -336,7 +352,7 @@ return function (Router $router) {
      */
     $router->post('/trainings/{id}/makeup', function (Request $request, $params) {
         Auth::require_login();
-        Auth::require_training($params['id']);
+        Marks::require_marker($params['id']);
 
         $training = Repo::find('trainings', $params['id'], 'Тренировка');
 
@@ -353,6 +369,14 @@ return function (Router $router) {
 
         $athlete = Repo::find('athletes', $data['athlete_id'], 'Спортсмен');
         $missed  = Repo::find('trainings', $data['missed_training_id'], 'Пропущенное занятие');
+
+        // На индивидуальном занятии отрабатывает только тот,
+        // ради кого оно назначено: чужой там взяться не может
+        if (!empty($training['athlete_id'])
+            && (int) $training['athlete_id'] !== (int) $athlete['id']) {
+            conflict('not_his_lesson',
+                'Это индивидуальное занятие другого спортсмена');
+        }
 
         $gap = Db::row('SELECT * FROM attendance WHERE training_id = ? AND athlete_id = ?',
                        array($missed['id'], $athlete['id']));
@@ -398,7 +422,7 @@ return function (Router $router) {
     $router->delete('/attendance/{id}', function (Request $request, $params) {
         Auth::require_login();
         $mark = Repo::find('attendance', $params['id'], 'Отметка');
-        Auth::require_training($mark['training_id']);
+        Marks::require_marker($mark['training_id']);
 
         if ($mark['makeup_for_training_id'] === null) {
             conflict('not_a_makeup',

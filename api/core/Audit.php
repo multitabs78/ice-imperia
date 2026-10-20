@@ -24,8 +24,8 @@ class Audit
                 'action'      => mb_substr((string) $action, 0, 64),
                 'entity'      => mb_substr((string) $entity, 0, 64),
                 'entity_id'   => $entityId === null ? null : (int) $entityId,
-                'before_json' => self::pack($before),
-                'after_json'  => self::pack($after),
+                'before_json' => self::pack(self::hide($before)),
+                'after_json'  => self::pack(self::hide($after)),
                 'reason'      => $reason === null ? null : mb_substr((string) $reason, 0, 255),
                 'ip'          => App::request() ? App::request()->ip : null,
                 'created_at'  => Db::now(),
@@ -34,6 +34,34 @@ class Audit
             // Журнал не должен ронять операцию, которую он записывает
             error_log('[Империя льда] Не записан журнал: ' . $error->getMessage());
         }
+    }
+
+    /**
+     * Поля, значения которых в журнал не попадают.
+     *
+     * Журнал хранит, что менялось, а не сами персональные
+     * данные. Иначе обезличивание профиля теряет смысл:
+     * имя и дата рождения остаются в истории, откуда их
+     * никто не удаляет.
+     */
+    private static $private = array(
+        'last_name', 'first_name', 'middle_name', 'birth_date',
+        'phone', 'email', 'password_hash', 'rank_doc', 'note',
+        'address', 'medical_until', 'insurance_until',
+    );
+
+    /** Заменяет значения личных полей на пометку. */
+    public static function hide($data)
+    {
+        if (!is_array($data)) {
+            return $data;
+        }
+        foreach ($data as $key => $value) {
+            if (in_array($key, self::$private, true) && $value !== null && $value !== '') {
+                $data[$key] = '—';
+            }
+        }
+        return $data;
     }
 
     /** Только изменившиеся поля — иначе журнал нечитаем. */

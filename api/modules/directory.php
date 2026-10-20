@@ -171,8 +171,9 @@ class Dir
             'SELECT COUNT(*) FROM enrollments e
                JOIN athletes a ON a.id = e.athlete_id
               WHERE e.group_id = ? AND a.status = ?
+                AND e.date_from <= ?
                 AND (e.date_to IS NULL OR e.date_to >= ?)',
-            array((int) $row['id'], 'active', date('Y-m-d'))
+            array((int) $row['id'], 'active', date('Y-m-d'), date('Y-m-d'))
         );
         return $out;
     }
@@ -258,6 +259,34 @@ class Dir
      * в составе на будущих тренировках и в счётчике группы,
      * хотя его давно нет.
      */
+    /**
+     * Закрывает все открытые назначения, кроме одного.
+     *
+     * Дата окончания не может быть раньше начала: при переводе
+     * задним числом назначение, начавшееся позже, закрывается
+     * днём своего же начала, а не отрицательным промежутком.
+     */
+    public static function closeOthers($athleteId, $keepId, $closeAt, $reason)
+    {
+        $open = Db::all('SELECT id, group_id, date_from FROM enrollments
+                          WHERE athlete_id = ? AND date_to IS NULL',
+                        array((int) $athleteId));
+
+        $n = 0;
+        foreach ($open as $row) {
+            if ($keepId !== null && (int) $row['id'] === (int) $keepId) {
+                continue;
+            }
+            $end = $row['date_from'] > $closeAt ? $row['date_from'] : $closeAt;
+            Db::update('enrollments', $row['id'], array('date_to' => $end));
+            Audit::write('close_enrollment', 'enrollment', $row['id'], null,
+                         array('date_to' => $end, 'group_id' => (int) $row['group_id']),
+                         $reason);
+            $n++;
+        }
+        return $n;
+    }
+
     public static function leaveGroups($athleteId, $date, $reason = null)
     {
         $open = Db::all('SELECT id, group_id, date_from FROM enrollments
@@ -334,9 +363,13 @@ return function (Router $router) {
         $groupId = (int) $request->input('group_id', 0);
         if ($groupId) {
             Auth::require_group($groupId);
+            // Назначенный со следующего месяца — ещё не состав:
+            // счётчик и список должны показывать одно и то же
             $where .= ' AND a.id IN (SELECT athlete_id FROM enrollments
-                                      WHERE group_id = ? AND (date_to IS NULL OR date_to >= ?))';
+                                      WHERE group_id = ? AND date_from <= ?
+                                        AND (date_to IS NULL OR date_to >= ?))';
             $params[] = $groupId;
+            $params[] = date('Y-m-d');
             $params[] = date('Y-m-d');
         }
 
@@ -417,20 +450,47 @@ return function (Router $router) {
                 conflict('rank_archived', 'Этот разряд убран из справочника');
             }
         }
-        if ($data['rank_date'] !== null && $data['rank_id'] === null
-            && $athlete['rank_id'] === null) {
-            invalid(array('rank_id' => 'Сначала выберите разряд'));
-        }
-        if ($data['left_at'] !== null && $data['joined_at'] === null
-            && $athlete['joined_at'] && $data['left_at'] < $athlete['joined_at']) {
-            invalid(array('left_at' => 'Отчисление раньше зачисления'));
-        }
 
         $changes = array();
         foreach ($data as $key => $value) {
             if ($value !== null) {
                 $changes[$key] = $value;
             }
+        }
+
+        // Пустая строка — это «очистить», а не «не трогать».
+        // Без этого ошибочно введённый номер документа или
+        // срок допуска нельзя было убрать совсем
+        foreach (array('middle_name', 'birth_date', 'rank_id', 'rank_date', 'rank_doc',
+                       'medical_until', 'insurance_until', 'note', 'gender') as $field) {
+            if (array_key_exists($field, $request->body)
+                && ($request->body[$field] === '' || $request->body[$field] === null)) {
+                $changes[$field] = null;
+            }
+        }
+
+        // Даты сверяем с тем, что получится после правки,
+        // а не с тем, что пришло: половина значений может
+        // остаться прежней
+        $joined = array_key_exists('joined_at', $changes)
+                  ? $changes['joined_at'] : $athlete['joined_at'];
+        $left   = array_key_exists('left_at', $changes)
+                  ? $changes['left_at'] : $athlete['left_at'];
+        $born   = array_key_exists('birth_date', $changes)
+                  ? $changes['birth_date'] : $athlete['birth_date'];
+
+        if ($joined && $left && $left < $joined) {
+            invalid(array('left_at' => 'Отчисление раньше зачисления'));
+        }
+        if ($born && $joined && $joined < $born) {
+            invalid(array('joined_at' => 'Зачисление раньше дня рождения'));
+        }
+        $rankId   = array_key_exists('rank_id', $changes)
+                    ? $changes['rank_id'] : $athlete['rank_id'];
+        $rankDate = array_key_exists('rank_date', $changes)
+                    ? $changes['rank_date'] : $athlete['rank_date'];
+        if ($rankDate !== null && $rankId === null) {
+            invalid(array('rank_id' => 'Сначала выберите разряд'));
         }
 
         // Отчислили — значит, в архив; вернули — значит, обратно.
@@ -454,8 +514,12 @@ return function (Router $router) {
                             $request->input('reason'));
 
         if (isset($changes['status']) && $changes['status'] === 'archived') {
-            Dir::leaveGroups($athlete['id'], $changes['left_at'],
-                             $request->input('reason'));
+            // Дата могла быть проставлена раньше: повторное
+            // сохранение уже отчисленной карточки не должно
+            // обращаться к значению, которого в правке нет
+            $leaveAt = isset($changes['left_at']) ? $changes['left_at']
+                     : ($athlete['left_at'] === null ? date('Y-m-d') : $athlete['left_at']);
+            Dir::leaveGroups($athlete['id'], $leaveAt, $request->input('reason'));
         }
 
         Db::commit();
@@ -1523,13 +1587,24 @@ return function (Router $router) {
             conflict('already_enrolled', 'Спортсмен уже занимается в этой группе');
         }
         if ($recent) {
+            Db::begin();
+
+            // Открытые назначения в другие группы закрываем
+            // и здесь: иначе человек числился бы сразу в двух
+            $closeAt = date('Y-m-d', strtotime($data['date_from'] . ' -1 day'));
+            $closed  = Dir::closeOthers($athlete['id'], $recent['id'], $closeAt,
+                                        'Вернулся в прежнюю группу');
+
             Db::update('enrollments', $recent['id'], array('date_to' => null));
             Audit::write('reopen_enrollment', 'enrollment', $recent['id'],
                          array('date_to' => $recent['date_to']), array('date_to' => null),
                          'Вернулся в группу');
+
+            Db::commit();
+
             Response::ok(array(
                 'enrollment_id' => (int) $recent['id'],
-                'closed'        => 0,
+                'closed'        => $closed,
                 'reopened'      => true,
                 'groups'        => Dir::groupsOf($athlete['id']),
             ));
@@ -1539,14 +1614,8 @@ return function (Router $router) {
 
         // Закрываем прошлые открытые назначения днём раньше перехода
         $closeAt = date('Y-m-d', strtotime($data['date_from'] . ' -1 day'));
-        $open = Db::all('SELECT id, group_id FROM enrollments
-                          WHERE athlete_id = ? AND date_to IS NULL', array($athlete['id']));
-        foreach ($open as $row) {
-            Db::update('enrollments', $row['id'], array('date_to' => $closeAt));
-            Audit::write('close_enrollment', 'enrollment', $row['id'], null,
-                         array('date_to' => $closeAt, 'group_id' => (int) $row['group_id']),
-                         'Перевод в другую группу');
-        }
+        $closed  = Dir::closeOthers($athlete['id'], null, $closeAt,
+                                    'Перевод в другую группу');
 
         $id = Repo::create('enrollments', array(
             'athlete_id' => $athlete['id'],
@@ -1560,7 +1629,7 @@ return function (Router $router) {
 
         Response::ok(array(
             'enrollment_id' => $id,
-            'closed'        => count($open),
+            'closed'        => $closed,
             'groups'        => Dir::groupsOf($athlete['id']),
         ), 201);
     });
@@ -1796,7 +1865,12 @@ return function (Router $router) {
 
         if ($inUse) {
             foreach (array('price', 'sessions_count', 'days_per_week') as $field) {
-                if ($data[$field] !== null && (string) $data[$field] !== (string) $tariff[$field]) {
+                // Сравниваем числа, а не строки: в базе цена
+                // лежит как 14400.00, из формы приходит 14400,
+                // и строковое сравнение запрещало правку,
+                // в которой цена вовсе не менялась
+                if ($data[$field] !== null
+                    && abs((float) $data[$field] - (float) $tariff[$field]) > 0.004) {
                     conflict('tariff_in_use',
                         'По этому тарифу уже выданы абонементы, цену и число занятий менять нельзя. '
                         . 'Создайте новую версию тарифа');
@@ -1845,6 +1919,18 @@ return function (Router $router) {
 
         Repo::save('tariffs', $tariff['id'], array('status' => 'archived'), 'tariff',
                    'Заменён версией № ' . $id);
+
+        // Что входило в тариф, входит и в новую версию:
+        // иначе смена цены молча убирала бы из абонемента
+        // зал и хореографию
+        $extras = Db::all('SELECT extra_class_id FROM tariff_extras WHERE tariff_id = ?',
+                          array($tariff['id']));
+        foreach ($extras as $one) {
+            Db::insert('tariff_extras', array(
+                'tariff_id'      => $id,
+                'extra_class_id' => $one['extra_class_id'],
+            ));
+        }
 
         // Группы, которые ссылались на старый тариф, переводим на новый
         Db::run('UPDATE training_groups SET tariff_id = ? WHERE tariff_id = ?',

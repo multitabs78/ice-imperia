@@ -1787,6 +1787,214 @@ $r = call('GET', '/groups/' . $gm, null, $admin);
 check('и счётчик снова сошёлся', $r['body']['athletes'] === $before - 1,
       'было ' . $before . ', стало ' . $r['body']['athletes']);
 
+echo "\nРазбор замечаний по базе\n";
+
+// R02: тренер на личном занятии виден проверке занятости
+$r = call('POST', '/athletes', array('last_name' => 'Личный', 'first_name' => 'Ученик'), $admin);
+$r02 = $r['body']['id'];
+$day = date('Y-m-d', strtotime($monday . ' +21 days'));
+
+call('POST', '/trainings', array('athlete_id' => $r02, 'date' => $day,
+     'time_start' => '12:00', 'kind_id' => $kindIce, 'spot_id' => $spot,
+     'coach_id' => $coach), $admin);
+$r = call('POST', '/trainings', array('group_id' => $group1, 'date' => $day,
+     'time_start' => '12:00', 'kind_id' => $kindGym, 'spot_id' => $hall,
+     'coach_id' => $coach), $admin);
+check('R02: личное занятие учитывается в занятости тренера', $r['status'] === 409
+      && $r['body']['error'] === 'slot_busy', 'код ' . $r['status'] . ' ' . $r['raw']);
+check('R02: и в тексте названо имя спортсмена',
+      strpos($r['body']['message'], 'Личный') !== false, $r['body']['message']);
+
+// R03: отработка не исчезает вместе с правилом
+$r = call('POST', '/groups/' . $group1 . '/schedule', array(
+    'weekday' => 7, 'time_start' => '09:00', 'kind_id' => $kindIce,
+    'spot_id' => $spot, 'valid_from' => $season), $admin);
+$r03rule = $r['body']['id'];
+call('POST', '/schedule/generate', array('group_id' => $group1, 'weeks' => 3,
+     'from' => date('Y-m-d', strtotime('-14 days'))), $admin);
+
+$r = call('GET', '/trainings?from=' . date('Y-m-d', strtotime('-14 days'))
+          . '&to=' . date('Y-m-d') . '&group_id=' . $group1, null, $admin);
+$sunday = null;
+foreach ($r['body']['items'] as $one) {
+    if ($one['time_start'] === '09:00' && $one['status'] === 'planned') { $sunday = $one['id']; }
+}
+check('R03: занятие для проверки нашлось', $sunday !== null, $r['raw']);
+
+if ($sunday) {
+    $gap = $pdo->query('SELECT id FROM trainings WHERE id <> ' . (int) $sunday
+                       . ' AND status = "held" LIMIT 1')->fetchColumn();
+    $pdo->prepare('INSERT INTO attendance (training_id, athlete_id, status, charged,
+                   makeup_for_training_id, marked_at) VALUES (?,?,?,?,?,?)')
+        ->execute(array($sunday, $kids['Белов'], 'present', 0, $gap, date('Y-m-d H:i:s')));
+
+    $r = call('DELETE', '/schedule-rules/' . $r03rule . '?from='
+              . date('Y-m-d', strtotime('-14 days'))
+              . '&reason=' . rawurlencode('Сняли'), null, $admin);
+    check('R03: занятие с отметкой отменено, а не удалено',
+          $r['status'] === 200 && $r['body']['cancelled'] >= 1,
+          'убрано ' . $r['body']['removed'] . ', отменено ' . $r['body']['cancelled']);
+
+    $kept = (int) $pdo->query('SELECT COUNT(*) FROM attendance WHERE training_id = '
+                              . (int) $sunday)->fetchColumn();
+    check('R03: отработка уцелела', $kept === 1, 'отметок: ' . $kept);
+}
+
+// R04: родитель видит занятие ребёнка, но не правит отметки
+$r = call('POST', '/parents', array('last_name' => 'Родителев', 'first_name' => 'Пётр',
+          'email' => 'r04@example.test'), $admin);
+$r04parent = $r['body']['id'];
+call('POST', '/athletes/' . $kids['Белов'] . '/parents',
+     array('parent_user_id' => $r04parent, 'relation' => 'father'), $admin);
+$pdo->prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+    ->execute(array(password_hash('parentpass12', PASSWORD_DEFAULT), $r04parent));
+$r = call('POST', '/auth/login', array('login' => 'r04@example.test',
+                                       'password' => 'parentpass12'));
+$parentToken = $r['body']['token'];
+
+// Личное занятие ребёнка — то самое, что родителю видно
+$r = call('POST', '/trainings', array('athlete_id' => $kids['Белов'],
+     'date' => date('Y-m-d', strtotime('-1 day')), 'time_start' => '08:00',
+     'kind_id' => $kindIce, 'spot_id' => $spot), $admin);
+$solo04 = $r['body']['id'];
+
+$r = call('GET', '/trainings/' . $solo04 . '/attendance', null, $parentToken);
+check('R04: родитель видит лист личного занятия своего ребёнка', $r['status'] === 200,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/trainings/' . $solo04 . '/attendance', array('marks' => array(
+    array('athlete_id' => $kids['Белов'], 'status' => 'absent'))), $parentToken);
+check('R04: но отметки менять не может', $r['status'] === 403,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/trainings/' . $solo04 . '/makeup', array(
+    'athlete_id' => $kids['Белов'], 'missed_training_id' => $t2), $parentToken);
+check('R04: и отработку не заводит', $r['status'] === 403, 'код ' . $r['status']);
+
+$r = call('GET', '/trainings/' . $t1 . '/attendance', null, $parentToken);
+check('R04: чужой групповой лист ему закрыт', $r['status'] === 403,
+      'код ' . $r['status']);
+
+// R05: возврат в группу не оставляет два открытых назначения
+$r = call('POST', '/athletes', array('last_name' => 'Двугруппов', 'first_name' => 'Иван'), $admin);
+$r05 = $r['body']['id'];
+call('POST', '/enrollments', array('athlete_id' => $r05, 'group_id' => $group1,
+     'date_from' => '2026-09-01'), $admin);
+call('POST', '/enrollments', array('athlete_id' => $r05, 'group_id' => $group2,
+     'date_from' => '2026-10-01'), $admin);
+$r = call('POST', '/enrollments', array('athlete_id' => $r05, 'group_id' => $group1,
+     'date_from' => date('Y-m-d')), $admin);
+check('R05: вернулись в прежнюю группу', $r['status'] === 200 || $r['status'] === 201,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+check('R05: прежняя группа закрыта при возврате', $r['body']['closed'] >= 1,
+      'закрыто: ' . $r['body']['closed']);
+
+$open = (int) $pdo->query('SELECT COUNT(*) FROM enrollments WHERE athlete_id = '
+                          . (int) $r05 . ' AND date_to IS NULL')->fetchColumn();
+check('R05: открытое назначение осталось одно', $open === 1, 'открытых: ' . $open);
+
+// Тот же случай, но с настоящим продолжением прежнего
+// назначения: уходим в другую группу вчера и возвращаемся
+// сегодня — прежнее должно ожить, а новое закрыться
+$r = call('POST', '/athletes', array('last_name' => 'Вернулов', 'first_name' => 'Пётр'), $admin);
+$r05b = $r['body']['id'];
+call('POST', '/enrollments', array('athlete_id' => $r05b, 'group_id' => $group1,
+     'date_from' => date('Y-m-d', strtotime('-30 days'))), $admin);
+
+// Второе открытое назначение заводим мимо обработчика:
+// ровно такие записи и остались в базе от прежней ошибки,
+// и именно их возврат в группу должен подобрать
+$pdo->exec('UPDATE enrollments SET date_to = "' . date('Y-m-d', strtotime('-1 day'))
+           . '" WHERE athlete_id = ' . (int) $r05b);
+$pdo->prepare('INSERT INTO enrollments (athlete_id, group_id, date_from, created_at)
+               VALUES (?,?,?,?)')
+    ->execute(array($r05b, $group2, date('Y-m-d', strtotime('-1 day')),
+                    date('Y-m-d H:i:s')));
+
+$r = call('POST', '/enrollments', array('athlete_id' => $r05b, 'group_id' => $group1,
+     'date_from' => date('Y-m-d')), $admin);
+check('R05: прежнее назначение продолжено', !empty($r['body']['reopened']),
+      'код ' . $r['status'] . ' ' . $r['raw']);
+check('R05: и вторая группа при этом закрыта', $r['body']['closed'] === 1,
+      'закрыто: ' . $r['body']['closed']);
+
+$open = (int) $pdo->query('SELECT COUNT(*) FROM enrollments WHERE athlete_id = '
+                          . (int) $r05b . ' AND date_to IS NULL')->fetchColumn();
+check('R05: открытое назначение снова одно', $open === 1, 'открытых: ' . $open);
+
+// R06: перевод задним числом не создаёт отрицательный промежуток
+$r = call('POST', '/athletes', array('last_name' => 'Задним', 'first_name' => 'Числом'), $admin);
+$r06 = $r['body']['id'];
+call('POST', '/enrollments', array('athlete_id' => $r06, 'group_id' => $group1,
+     'date_from' => '2026-12-01'), $admin);
+call('POST', '/enrollments', array('athlete_id' => $r06, 'group_id' => $group2,
+     'date_from' => '2026-10-05'), $admin);
+$bad = (int) $pdo->query('SELECT COUNT(*) FROM enrollments
+                           WHERE athlete_id = ' . (int) $r06 . '
+                             AND date_to IS NOT NULL AND date_to < date_from')->fetchColumn();
+check('R06: окончаний раньше начала нет', $bad === 0, 'плохих: ' . $bad);
+
+// R07: ошибочно заполненное поле можно очистить
+call('PATCH', '/athletes/' . $r06, array('rank_doc' => 'Ошибка',
+     'medical_until' => '2027-01-01'), $admin);
+$r = call('PATCH', '/athletes/' . $r06, array('rank_doc' => '',
+          'medical_until' => '', 'reason' => 'Внесли по ошибке'), $admin);
+check('R07: поля очищаются', $r['status'] === 200 && $r['body']['rank_doc'] === null
+      && $r['body']['medical_until'] === null, $r['raw']);
+
+// R08: проверка дат смотрит на итог, а не на присланное
+call('PATCH', '/athletes/' . $r06, array('joined_at' => '2026-09-01'), $admin);
+$r = call('PATCH', '/athletes/' . $r06, array('left_at' => '2026-08-01'), $admin);
+check('R08: отчисление раньше зачисления не проходит', $r['status'] === 422,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('PATCH', '/athletes/' . $r06,
+          array('birth_date' => '2030-01-01'), $admin);
+check('R08: дата рождения в будущем не проходит', $r['status'] === 422,
+      'код ' . $r['status']);
+
+// R09: назначенный с будущей даты ещё не в составе
+$r = call('POST', '/athletes', array('last_name' => 'Будущий', 'first_name' => 'Член'), $admin);
+$r09 = $r['body']['id'];
+$r = call('GET', '/groups/' . $group2, null, $admin);
+$was09 = $r['body']['athletes'];
+call('POST', '/enrollments', array('athlete_id' => $r09, 'group_id' => $group2,
+     'date_from' => date('Y-m-d', strtotime('+30 days'))), $admin);
+$r = call('GET', '/groups/' . $group2, null, $admin);
+check('R09: будущее назначение в счётчик не идёт', $r['body']['athletes'] === $was09,
+      'было ' . $was09 . ', стало ' . $r['body']['athletes']);
+
+// R13: правка тарифа без изменения цены не блокируется.
+// Цену записываем с дробной частью руками: на MySQL она
+// и хранится как 14400.00, а SQLite в тестах округляет —
+// без этого проверка на нём ничего бы не значила
+$pdo->exec('UPDATE tariffs SET price = "14400.00" WHERE id = ' . (int) $tariff);
+
+$r = call('PATCH', '/tariffs/' . $tariff, array('price' => 14400,
+          'name' => 'СОГ-1, два раза'), $admin);
+check('R13: та же цена правку не блокирует', $r['status'] === 200,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+// R15: повторное сохранение отчисленной карточки
+call('PATCH', '/athletes/' . $r09, array('status' => 'archived',
+     'reason' => 'Передумали'), $admin);
+$r = call('PATCH', '/athletes/' . $r09, array('status' => 'archived',
+          'reason' => 'Ещё раз'), $admin);
+check('R15: повторное сохранение проходит', $r['status'] === 200,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+// R10: персональные данные не оседают в журнале
+$leak = (int) $pdo->query("SELECT COUNT(*) FROM audit_log
+                            WHERE entity = 'athlete'
+                              AND (before_json LIKE '%Белов%' OR after_json LIKE '%Белов%'
+                                OR before_json LIKE '%2016-05-05%'
+                                OR after_json LIKE '%2016-05-05%')")->fetchColumn();
+check('R10: имён и дат рождения в журнале нет', $leak === 0, 'записей с данными: ' . $leak);
+
+$kept = (int) $pdo->query("SELECT COUNT(*) FROM audit_log WHERE entity = 'athlete'")
+                  ->fetchColumn();
+check('R10: сами записи журнала при этом остались', $kept > 0, 'записей: ' . $kept);
+
 echo "\nЖурнал справочников\n";
 
 $kinds = $pdo->query("SELECT DISTINCT entity FROM audit_log")->fetchAll(PDO::FETCH_COLUMN);

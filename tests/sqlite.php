@@ -85,9 +85,10 @@ class SqliteTestDb
 
             // ADD KEY — это индекс, а не столбец. Пишем его
             // отдельной командой, как того и хочет SQLite
-            if (preg_match('/^ALTER\s+TABLE\s+(\S+)\s+ADD\s+(?:KEY|INDEX)\s+(\w+)\s*\((.+)\)\s*$/is',
+            if (preg_match('/^ALTER\s+TABLE\s+(\S+)\s+ADD\s+(UNIQUE\s+)?(?:KEY|INDEX)\s+(\w+)\s*\((.+)\)\s*$/is',
                            $sql, $m)) {
-                return 'CREATE INDEX IF NOT EXISTS ' . $m[2] . ' ON ' . $m[1] . ' (' . $m[3] . ')';
+                return 'CREATE ' . (trim($m[2]) ? 'UNIQUE ' : '') . 'INDEX IF NOT EXISTS '
+                     . $m[3] . ' ON ' . $m[1] . ' (' . $m[4] . ')';
             }
 
             // MODIFY COLUMN, снимающий обязательность, отмечаем
@@ -114,6 +115,7 @@ class SqliteTestDb
         $sql = preg_replace('/^INSERT\s+INTO\b/i', 'INSERT OR IGNORE INTO', $sql);
         $sql = preg_replace('/\bNOW\(\)/i', "datetime('now')", $sql);
         $sql = preg_replace('/\bCURDATE\(\)/i', "date('now')", $sql);
+
 
         return trim($sql);
     }
@@ -232,7 +234,11 @@ class SqliteTestDb
     private static function columnType($rest)
     {
         $rest = preg_replace('/\bENUM\s*\([^)]*\)/i', 'TEXT', $rest);
-        $rest = preg_replace('/\bDECIMAL\s*\(\d+,\s*\d+\)/i', 'NUMERIC', $rest);
+        // DECIMAL переводим в TEXT, а не NUMERIC: MySQL отдаёт
+        // цену строкой «14400.00», и SQLite с числовым
+        // сродством молча превращал бы её в 14400. Тогда
+        // проверки сравнения денег на нём ничего не значат
+        $rest = preg_replace('/\bDECIMAL\s*\(\d+,\s*\d+\)/i', 'TEXT', $rest);
         $rest = preg_replace('/\b(?:BIG|SMALL|TINY|MEDIUM)?INT\b(\s*\(\d+\))?(\s+UNSIGNED)?/i',
                              'INTEGER', $rest);
         $rest = preg_replace('/\b(?:VAR)?CHAR\s*\(\d+\)/i', 'TEXT', $rest);

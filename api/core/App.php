@@ -113,6 +113,18 @@ class App
         } catch (PDOException $error) {
             Db::rollback();
             error_log('[Империя льда] База: ' . $error->getMessage());
+
+            // Уникальный ключ сработал — значит, кто-то успел
+            // записать то же самое, пока мы проверяли. Это
+            // не сбой, а состязание двух запросов, и человеку
+            // надо сказать именно это
+            $code = isset($error->errorInfo[1]) ? (int) $error->errorInfo[1] : 0;
+            if ($code === 1062 || $error->getCode() === '23000') {
+                Response::fail(new ApiError(409, 'duplicate',
+                    'Такая запись уже есть. Обновите страницу и посмотрите, '
+                    . 'не внесли ли её только что'));
+            }
+
             Response::fail(new ApiError(500, 'server_error',
                 'Сбой на сервере. Попробуйте ещё раз или сообщите администратору'));
         } catch (Throwable $error) {
