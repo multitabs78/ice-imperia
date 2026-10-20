@@ -78,7 +78,7 @@ async function fillSheet(page, values, submitText) {
 
   await page.waitForSelector('.tab', { timeout: 8000 });
   const tabs = await page.locator('.tab').allTextContents();
-  check('администратору видны все разделы', tabs.length === 8, tabs.join(', '));
+  check('администратору видны все разделы', tabs.length === 9, tabs.join(', '));
   check('имя вошедшего в шапке',
         (await page.textContent('#who')).includes('Стефанова'), await page.textContent('#who'));
 
@@ -261,6 +261,46 @@ async function fillSheet(page, values, submitText) {
         await page.textContent('tr:has-text("illness_days_threshold")'));
   check('цен в настройках больше нет',
         !(await page.textContent('.board')).includes('single_lesson_price'));
+
+  console.log('\nДоступ к кабинету');
+
+  await page.goto(BASE + '/cabinet/#/admins', { waitUntil: 'load' });
+  await page.waitForSelector('.rows tbody tr', { timeout: 8000 });
+  check('раздел доступа открылся',
+        (await page.textContent('.head h1')).includes('Доступ'),
+        await page.textContent('.head h1'));
+  check('себя видно пометкой',
+        (await page.textContent('.board')).includes('это вы'),
+        await page.textContent('.board'));
+  check('у себя нет кнопки снятия прав',
+        (await page.locator('tr:has-text("это вы") button:has-text("Снять права")').count()) === 0);
+
+  await page.click('text=Добавить администратора');
+  await page.waitForSelector('dialog.sheet[open]');
+  check('можно выбрать уже заведённого человека',
+        (await page.locator('dialog.sheet [name=user_id] option').count()) >= 2,
+        'вариантов: ' + (await page.locator('dialog.sheet [name=user_id] option').count()));
+
+  await fillSheet(page, {
+    last_name: 'Директоров', first_name: 'Павел',
+    email: 'director@example.test', password: 'adminpass123'
+  });
+  await page.waitForTimeout(900);
+  const admins = await page.textContent('.board');
+  check('второй администратор появился', admins.includes('Директоров'), admins);
+  check('его роль названа словом', admins.includes('администратор'), admins);
+  await page.screenshot({ path: OUT + '/cab-admins.png' });
+
+  await page.click('tr:has-text("Директоров") button:has-text("Снять права")');
+  await page.waitForSelector('dialog.sheet[open]');
+  check('снятие прав спрашивает основание',
+        (await page.textContent('dialog.sheet')).includes('Основание'),
+        await page.textContent('dialog.sheet'));
+  await fillSheet(page, { reason: 'Уволился' });
+  await page.waitForTimeout(900);
+  check('права сняты, человек ушёл из списка',
+        !(await page.textContent('.board')).includes('Директоров'),
+        await page.textContent('.board'));
 
   console.log('\nКарточка спортсмена');
 

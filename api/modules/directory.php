@@ -240,6 +240,25 @@ class Dir
     }
 
     /** Заводит пользователю роль, если её ещё нет. */
+    /**
+     * Последнего администратора трогать нельзя: без него
+     * в кабинет не войдёт никто и чинить это придётся
+     * руками в базе.
+     */
+    public static function assertNotLastAdmin($userId)
+    {
+        $others = (int) Db::value(
+            'SELECT COUNT(*) FROM user_roles r
+               JOIN users u ON u.id = r.user_id
+              WHERE r.role = ? AND u.status = ? AND r.user_id <> ?',
+            array('admin', 'active', (int) $userId));
+
+        if ($others === 0) {
+            conflict('last_admin',
+                'Это единственный администратор. Сначала назначьте другого');
+        }
+    }
+
     public static function addRole($userId, $role)
     {
         $has = Db::value('SELECT 1 FROM user_roles WHERE user_id = ? AND role = ?',
@@ -743,6 +762,169 @@ return function (Router $router) {
             $items[] = $person;
         }
         Response::items($items);
+    });
+
+    /* =====================================================
+       Администраторы
+       ---------------------------------------------------
+       Первого заводит db/seed-admin.php, пока входить
+       в кабинет некому. Остальных — отсюда: держать
+       на сервере скрипт, умеющий создавать администратора,
+       дольше необходимого незачем.
+       ===================================================== */
+
+    $router->get('/admins', function (Request $request) {
+        Auth::require_admin();
+
+        $rows = Db::all(
+            'SELECT u.* FROM users u
+               JOIN user_roles r ON r.user_id = u.id AND r.role = ?
+              ORDER BY u.last_name, u.first_name',
+            array('admin'));
+
+        $items = array();
+        foreach ($rows as $row) {
+            $one = Dir::person($row);
+            $one['roles'] = Auth::rolesOf((int) $row['id']);
+            $one['self']  = (int) $row['id'] === (int) Auth::id();
+            $items[] = $one;
+        }
+        Response::items($items);
+    });
+
+    /**
+     * Новый администратор — либо отдельный человек, либо роль
+     * тому, кто уже заведён: тренер школы вполне может быть
+     * и администратором, и второй вход ему ни к чему.
+     */
+    $router->post('/admins', function (Request $request) {
+        Auth::require_admin();
+
+        $data = (new Validate($request->body))
+            ->int('user_id', 'Учётная запись', false, 1)
+            ->text('last_name', 'Фамилия', false, 80)
+            ->text('first_name', 'Имя', false, 80)
+            ->text('middle_name', 'Отчество', false, 80)
+            ->phone('phone', 'Телефон', false)
+            ->email('email', 'Почта', false)
+            ->text('password', 'Временный пароль', false, 200, 8)
+            ->done();
+
+        Db::begin();
+
+        if ($data['user_id'] !== null) {
+            $user = Repo::find('users', $data['user_id'], 'Учётная запись');
+            if (Auth::rolesOf((int) $user['id']) && in_array('admin', Auth::rolesOf((int) $user['id']))) {
+                conflict('already_admin', 'Этот человек уже администратор');
+            }
+            Dir::addRole($user['id'], 'admin');
+            $id = (int) $user['id'];
+
+        } else {
+            if ($data['last_name'] === null || $data['first_name'] === null) {
+                invalid(array('last_name' => 'Укажите фамилию и имя'));
+            }
+            if ($data['phone'] === null && $data['email'] === null) {
+                invalid(array('email' => 'Нужен телефон или почта — по ним администратор входит'));
+            }
+            Dir::assertFree($data['phone'], $data['email']);
+
+            $fields = array(
+                'last_name'   => $data['last_name'],
+                'first_name'  => $data['first_name'],
+                'middle_name' => $data['middle_name'],
+                'phone'       => $data['phone'],
+                'email'       => $data['email'],
+                'status'      => 'active',
+                'created_at'  => Db::now(),
+            );
+            if ($data['password'] !== null) {
+                $fields['password_hash'] = password_hash($data['password'], PASSWORD_DEFAULT);
+                // Временный пароль знает не только он: при первом
+                // входе система потребует задать свой
+                $fields['must_change_password'] = 1;
+            }
+
+            $id = Repo::create('users', $fields, 'admin');
+            Dir::addRole($id, 'admin');
+        }
+
+        Db::commit();
+
+        $out = Dir::person(Repo::find('users', $id));
+        $out['roles'] = Auth::rolesOf($id);
+        Response::ok($out, 201);
+    });
+
+    $router->patch('/admins/{id}', function (Request $request, $params) {
+        Auth::require_admin();
+        $user = Repo::find('users', $params['id'], 'Администратор');
+
+        $data = (new Validate($request->body))
+            ->text('last_name', 'Фамилия', 'present', 80)
+            ->text('first_name', 'Имя', 'present', 80)
+            ->text('middle_name', 'Отчество', false, 80)
+            ->phone('phone', 'Телефон', false)
+            ->email('email', 'Почта', false)
+            ->one_of('status', 'Состояние', array('active', 'blocked'), false)
+            ->done();
+
+        Dir::assertFree($data['phone'], $data['email'], $user['id']);
+
+        // Закрыть вход самому себе — верный способ остаться
+        // снаружи с открытой вкладкой и без пути обратно
+        if (isset($data['status']) && $data['status'] === 'blocked') {
+            if ((int) $user['id'] === (int) Auth::id()) {
+                conflict('self_block', 'Нельзя закрыть вход самому себе');
+            }
+            Dir::assertNotLastAdmin($user['id']);
+        }
+
+        $changes = array();
+        foreach ($data as $key => $value) {
+            if ($value !== null) { $changes[$key] = $value; }
+        }
+
+        $saved = Repo::save('users', $user['id'], $changes, 'admin',
+                            $request->input('reason'));
+
+        if (isset($changes['status']) && $changes['status'] === 'blocked') {
+            Auth::revoke_all($user['id']);
+        }
+
+        $out = Dir::person($saved);
+        $out['roles'] = Auth::rolesOf((int) $user['id']);
+        Response::ok($out);
+    });
+
+    /**
+     * Снять права администратора. Сама учётная запись
+     * остаётся: человек мог быть ещё и тренером.
+     *
+     * С себя снять можно, если останется кто-то ещё: уход
+     * с передачей дел — обычное дело, а вот школа без
+     * единственного администратора чинится только руками
+     * в базе.
+     */
+    $router->delete('/admins/{id}', function (Request $request, $params) {
+        Auth::require_admin();
+        $user = Repo::find('users', $params['id'], 'Администратор');
+
+        $reason = trim((string) $request->input('reason'));
+        if ($reason === '') {
+            invalid(array('reason' => 'Укажите основание'));
+        }
+        // Снять права с себя можно — человек вправе уйти,
+        // передав дела. Нельзя остаться вовсе без
+        // администраторов: это чинится только руками в базе
+        Dir::assertNotLastAdmin($user['id']);
+
+        Db::run('DELETE FROM user_roles WHERE user_id = ? AND role = ?',
+                array($user['id'], 'admin'));
+        Audit::write('revoke_admin', 'admin', $user['id'], array('role' => 'admin'),
+                     null, $reason);
+
+        Response::ok(array('roles' => Auth::rolesOf((int) $user['id'])));
     });
 
     /* =====================================================

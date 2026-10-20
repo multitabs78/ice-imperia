@@ -240,6 +240,7 @@
     { id: 'groups',   title: 'Группы',     roles: ['admin', 'coach'] },
     { id: 'schedule', title: 'Расписание', roles: ['admin', 'coach'] },
     { id: 'coaches',  title: 'Тренеры',    roles: ['admin'] },
+    { id: 'admins',   title: 'Доступ',     roles: ['admin'] },
     { id: 'parents',  title: 'Родители',   roles: ['admin'] },
     { id: 'tariffs',  title: 'Тарифы',     roles: ['admin'] },
     { id: 'services', title: 'Услуги',     roles: ['admin'] },
@@ -1247,6 +1248,159 @@
           toast('Сохранено');
           screenCoaches();
         });
+      }
+    });
+  }
+
+  /* =====================================================
+     Администраторы
+     ===================================================== */
+
+  function screenAdmins() {
+    drawTabs('admins');
+    loading();
+
+    api('GET', '/admins').then(function (answer) {
+      if (!answer.ok) { return fail(answer); }
+
+      var items = answer.data.items || [];
+      var box = clear(page);
+
+      box.appendChild(heading('Доступ к кабинету',
+        items.length + ' ' + plural(items.length, 'администратор', 'администратора',
+                                    'администраторов'),
+        [el('button', { class: 'btn btn--primary btn--small', onclick: newAdmin },
+            'Добавить администратора')]));
+
+      box.appendChild(el('p', { class: 'field__note', text:
+        'Администратор видит и правит всё. Последнего администратора снять нельзя — '
+        + 'иначе в кабинет не войдёт никто.' }));
+
+      var rows = items.map(function (one) {
+        var act = el('td', { class: 'act' }, [
+          el('button', { class: 'linkish',
+            onclick: function () { editAdmin(one); } }, 'Изменить')
+        ]);
+        if (!one.self) {
+          act.appendChild(document.createTextNode(' '));
+          act.appendChild(el('button', { class: 'linkish linkish--danger',
+            onclick: function () { dropAdmin(one); } }, 'Снять права'));
+        }
+
+        return el('tr', { class: 'is-flat' }, [
+          el('td', { class: 'title' }, one.name),
+          el('td', { class: 'dim', 'data-label': 'Контакты' },
+             [one.phone, one.email].filter(Boolean).join(' · ') || '—'),
+          el('td', { 'data-label': 'Роли' },
+             (one.roles || []).map(function (r) {
+               return el('span', { class: 'pill' }, roleName(r));
+             })),
+          el('td', null, [
+            one.self ? el('span', { class: 'pill' }, 'это вы') : null,
+            one.status === 'blocked'
+              ? el('span', { class: 'pill pill--warn' }, 'вход закрыт') : null
+          ]),
+          act
+        ]);
+      });
+
+      box.appendChild(board([table([
+        { title: 'Фамилия и имя' }, { title: 'Контакты' }, { title: 'Роли' },
+        { title: '' }, { title: '', class: 'act' }
+      ], rows)]));
+    });
+  }
+
+  function roleName(role) {
+    if (role === 'admin')   { return 'администратор'; }
+    if (role === 'coach')   { return 'тренер'; }
+    if (role === 'parent')  { return 'родитель'; }
+    if (role === 'athlete') { return 'спортсмен'; }
+    return role;
+  }
+
+  function newAdmin() {
+    api('GET', '/users').then(function (answer) {
+      var people = [{ value: '', label: 'завести нового человека' }].concat(
+        (answer.data.items || [])
+          .filter(function (u) { return (u.roles || []).indexOf('admin') === -1; })
+          .map(function (u) {
+            return { value: u.id, label: u.name + (u.email ? ' · ' + u.email : '') };
+          }));
+
+      openSheet({
+        title: 'Новый администратор',
+        note: 'Если человек уже заведён — например, тренер школы, — выберите его '
+            + 'учётную запись: вход останется один, а прав прибавится.',
+        submit: 'Добавить',
+        fields: [
+          { name: 'user_id', label: 'Учётная запись', type: 'select', options: people },
+          { name: 'last_name', label: 'Фамилия' },
+          { name: 'first_name', label: 'Имя' },
+          { name: 'middle_name', label: 'Отчество, если есть' },
+          { name: 'phone', label: 'Телефон', placeholder: '+7 999 000 00 00' },
+          { name: 'email', label: 'Почта' },
+          { name: 'password', label: 'Временный пароль', type: 'text',
+            hint: 'Не короче восьми символов. При первом входе система попросит '
+                + 'заменить его на свой' }
+        ],
+        onSubmit: function (values) {
+          // У существующей записи контакты и пароль не трогаем
+          if (values.user_id) {
+            delete values.last_name; delete values.first_name; delete values.middle_name;
+            delete values.phone; delete values.email; delete values.password;
+          }
+          Object.keys(values).forEach(function (k) { if (!values[k]) { delete values[k]; } });
+
+          return api('POST', '/admins', values).then(function (result) {
+            if (!result.ok) { return result; }
+            toast('Администратор добавлен');
+            screenAdmins();
+          });
+        }
+      });
+    });
+  }
+
+  function editAdmin(one) {
+    openSheet({
+      title: 'Изменить администратора',
+      note: one.self ? 'Это вы: закрыть вход самому себе нельзя.' : null,
+      fields: [
+        { name: 'last_name', label: 'Фамилия', value: one.last_name },
+        { name: 'first_name', label: 'Имя', value: one.first_name },
+        { name: 'middle_name', label: 'Отчество', value: one.middle_name },
+        { name: 'phone', label: 'Телефон', value: one.phone },
+        { name: 'email', label: 'Почта', value: one.email }
+      ].concat(one.self ? [] : [
+        { name: 'status', label: 'Вход', type: 'select', value: one.status, options: [
+          { value: 'active', label: 'открыт' },
+          { value: 'blocked', label: 'закрыт' }
+        ] }
+      ]),
+      onSubmit: function (values) {
+        return api('PATCH', '/admins/' + one.id, values).then(function (answer) {
+          if (!answer.ok) { return answer; }
+          toast('Сохранено');
+          screenAdmins();
+        });
+      }
+    });
+  }
+
+  function dropAdmin(one) {
+    confirmWithReason({
+      title: 'Снять права администратора',
+      note: one.name + ' перестанет видеть разделы администратора. Учётная запись '
+          + 'останется — если человек ещё и тренер, тренером он быть не перестанет.',
+      submit: 'Снять права',
+      onConfirm: function (why) {
+        return api('DELETE', '/admins/' + one.id + '?reason=' + encodeURIComponent(why))
+          .then(function (answer) {
+            if (!answer.ok) { return answer; }
+            toast('Права сняты');
+            screenAdmins();
+          });
       }
     });
   }
@@ -2782,6 +2936,7 @@
     if (where === 'training' && parts[1]) { return screenTraining(parts[1]); }
     if (where === 'journal'  && parts[1]) { return screenJournal(parts[1], parts[2]); }
     if (where === 'coaches'  && can(['admin'])) { return screenCoaches(); }
+    if (where === 'admins'   && can(['admin'])) { return screenAdmins(); }
     if (where === 'parents'  && can(['admin'])) { return screenParents(); }
     if (where === 'tariffs'  && can(['admin'])) { return screenTariffs(); }
     if (where === 'services' && can(['admin'])) { return screenServices(); }

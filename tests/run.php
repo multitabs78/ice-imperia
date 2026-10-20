@@ -447,6 +447,107 @@ foreach ($r['body']['items'] as $one) { $names[] = $one['name']; }
 check('в архиве его больше не предлагают', !in_array('ОФП и растяжка', $names),
       implode(', ', $names));
 
+echo "\nАдминистраторы\n";
+
+$r = call('GET', '/admins', null, $admin);
+check('в списке администраторов пока один', $r['status'] === 200
+      && count($r['body']['items']) === 1, $r['raw']);
+check('себя видно как себя', $r['body']['items'][0]['self'] === true, $r['raw']);
+
+$r = call('POST', '/admins', array(
+    'last_name' => 'Директоров', 'first_name' => 'Павел',
+    'email' => 'director@example.test', 'password' => 'adminpass123'), $admin);
+$admin2 = isset($r['body']['id']) ? $r['body']['id'] : null;
+check('второй администратор заведён', $r['status'] === 201 && $admin2,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+check('роль ему выдана', in_array('admin', $r['body']['roles']), $r['raw']);
+
+$r = call('POST', '/auth/login', array('login' => 'director@example.test',
+                                       'password' => 'adminpass123'));
+$admin2Token = isset($r['body']['token']) ? $r['body']['token'] : null;
+check('он входит по временному паролю', $r['status'] === 200 && $admin2Token,
+      'код ' . $r['status']);
+check('и система требует сменить его',
+      !empty($r['body']['user']['must_change_password']), $r['raw']);
+
+$r = call('GET', '/athletes', null, $admin2Token);
+check('и видит то же, что первый', $r['status'] === 200, 'код ' . $r['status']);
+
+$r = call('POST', '/admins', array(
+    'last_name' => 'Двойников', 'first_name' => 'Иван',
+    'email' => 'director@example.test', 'password' => 'otherpass123'), $admin);
+check('занятую почту второй раз не взять', $r['status'] === 409, 'код ' . $r['status']);
+
+$r = call('POST', '/admins', array('last_name' => 'Безсвязи', 'first_name' => 'Пётр'), $admin);
+check('без телефона и почты администратора не завести', $r['status'] === 422,
+      'код ' . $r['status']);
+
+$r = call('POST', '/admins', array('password' => 'nopass12345'), $admin);
+check('и без имени тоже', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('PATCH', '/admins/' . $adminId, array('status' => 'blocked'), $admin);
+check('и вход себе не закрыть', $r['status'] === 409
+      && $r['body']['error'] === 'self_block', 'код ' . $r['status']);
+
+$r = call('DELETE', '/admins/' . $admin2, null, $admin);
+check('без основания права не снимаем', $r['status'] === 422, 'код ' . $r['status']);
+
+$r = call('DELETE', '/admins/' . $admin2 . '?reason=' . rawurlencode('Уволился'), null, $admin);
+check('с основанием снимаются', $r['status'] === 200, 'код ' . $r['status'] . ' ' . $r['raw']);
+check('роль администратора ушла',
+      !in_array('admin', $r['body']['roles']), json_encode($r['body']));
+
+$left = (int) $pdo->query('SELECT COUNT(*) FROM users WHERE id = ' . (int) $admin2)
+                  ->fetchColumn();
+check('а сама учётная запись осталась', $left === 1, 'записей: ' . $left);
+
+$r = call('GET', '/athletes', null, $admin2Token);
+check('без роли разделы администратора закрыты', $r['status'] === 403,
+      'код ' . $r['status']);
+
+// Последнего администратора снять нельзя
+$r = call('POST', '/admins', array('user_id' => $admin2), $admin);
+check('права можно вернуть существующему человеку', $r['status'] === 201,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('POST', '/admins', array('user_id' => $admin2), $admin);
+check('дважды — отказ', $r['status'] === 409
+      && $r['body']['error'] === 'already_admin', 'код ' . $r['status']);
+
+// Пока второй администратор есть, уйти самому можно
+$r = call('DELETE', '/admins/' . $adminId . '?reason=' . rawurlencode('Передаю дела'), null, $admin);
+check('уйти самому можно, если есть кому передать', $r['status'] === 200,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('GET', '/admins', null, $admin);
+check('и прежний администратор сразу теряет доступ', $r['status'] === 403,
+      'код ' . $r['status']);
+
+// Возвращаем себе права от имени второго и проверяем,
+// что последнего снять нельзя
+$r = call('POST', '/auth/change-password', array(
+    'current' => 'adminpass123', 'password' => 'newadminpass1'), $admin2Token);
+$r = call('POST', '/admins', array('user_id' => $adminId), $admin2Token);
+check('второй администратор вернул права первому', $r['status'] === 201,
+      'код ' . $r['status'] . ' ' . $r['raw']);
+
+$r = call('DELETE', '/admins/' . $adminId . '?reason=' . rawurlencode('Обратно'), null, $admin2Token);
+$r = call('DELETE', '/admins/' . $admin2 . '?reason=' . rawurlencode('И себя'), null, $admin2Token);
+check('последнего администратора снять нельзя', $r['status'] === 409
+      && $r['body']['error'] === 'last_admin', 'код ' . $r['status'] . ' ' . $r['raw']);
+
+// Возвращаем первого, дальше проверки идут от его имени
+call('POST', '/admins', array('user_id' => $adminId), $admin2Token);
+$r = call('POST', '/auth/login', array('login' => 'admin@example.test',
+                                       'password' => 'newpassword123'));
+$admin = $r['body']['token'];
+check('первый администратор снова в деле', $r['status'] === 200 && $admin,
+      'код ' . $r['status']);
+
+$r = call('GET', '/admins', null, $coachToken ?? null);
+check('тренеру раздел закрыт', $r['status'] === 401 || $r['status'] === 403,
+      'код ' . $r['status']);
+
 echo "\nСправочники: группы и тренеры\n";
 
 $r = call('POST', '/groups', array('code' => 'СОГ-1', 'name' => 'Спортивно-оздоровительная'), $admin);
